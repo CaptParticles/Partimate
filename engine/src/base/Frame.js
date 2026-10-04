@@ -465,7 +465,7 @@ Wick.Frame = class extends Wick.Tickable {
      */
     createTween() {
         // Don't make a tween if one already exists at this position.
-        var playheadPosition = this.getRelativePlayheadPosition();
+        var playheadPosition = 1;
         if (this.getTweenAtPosition(playheadPosition)) {
             return;
         }
@@ -760,4 +760,3 @@ Wick.Frame = class extends Wick.Tickable {
         });
     }
 }
-
