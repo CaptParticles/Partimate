@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.9.30.19.36.58";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.3.11.38.55";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -46892,27 +46892,6 @@ Wick.ToolSettings = class {
       name: 'brushMode',
       default: 'none',
       options: ['none', 'behind', 'inside']
-    }, {
-      /**
-       * The render style of the outside-clip viewer.
-       * "none": Don't show the objects outside the current clip
-       * "standard": Show the outside objects at a certain opacity
-       */
-      type: "choice",
-      name: 'outsideClipStyle',
-      default: 'none',
-      options: ['none', 'standard']
-    }, {
-      type: "number",
-      name: 'outsideClipStandardOpacity',
-      default: 0.5,
-      min: 0,
-      max: 1,
-      step: 0.01
-    }, {
-      type: "boolean",
-      name: 'outsideClipShowBorder',
-      default: false
     }];
   }
 
@@ -49623,8 +49602,11 @@ Wick.Layer = class extends Wick.Base {
       throw new Error('insertKeyframe: playheadPosition must be a positive number');
     }
     playheadPosition = Math.floor(playheadPosition);
+
+    // Already on a keyframe/frame boundary: do not duplicate it.
     var existingFrame = this.getFrameAtPlayheadPosition(playheadPosition);
     if (!existingFrame) {
+      // There is no frame at this position. Create a blank keyframe.
       var blankFrame = new Wick.Frame({
         start: playheadPosition,
         end: playheadPosition
@@ -49637,62 +49619,22 @@ Wick.Layer = class extends Wick.Base {
     if (existingFrame.start === playheadPosition) {
       return existingFrame;
     }
-    var originalEnd = existingFrame.end;
-    var splitPosition = playheadPosition - existingFrame.start + 1;
 
-    // Capture the exact visual state at the new keyframe before splitting.
-    var splitTween = existingFrame.getActiveTween();
-    var splitTransformation = splitTween ? splitTween.transformation.copy() : null;
-
-    // Copy the complete frame so the new keyframe has independent content.
+    // Copy the complete frame tree so paths, clips, and nested data are
+    // independent objects instead of shared references.
     var newFrame = existingFrame.copy();
 
-    // Shorten the original frame to the left side of the new keyframe.
+    // The original frame becomes the first part of the hold.
+    var originalEnd = existingFrame.end;
     existingFrame.end = playheadPosition - 1;
-
-    // Remove copied tween markers that are now outside the shortened frame.
-    existingFrame.tweens.slice().forEach(tween => {
-      if (tween.playheadPosition >= splitPosition) {
-        tween.remove();
-      }
-    });
-
-    // Preserve the tween's exact state at the split as the endpoint
-    // of the left-hand tween segment.
-    if (splitTransformation) {
-      existingFrame.addTween(new Wick.Tween({
-        playheadPosition: existingFrame.length,
-        transformation: splitTransformation.copy()
-      }));
-    }
 
     // The copied frame becomes the new keyframe and keeps the remainder
     // of the original frame's duration.
     newFrame.start = playheadPosition;
     newFrame.end = originalEnd;
 
-    // Remove tween markers that belong before the new keyframe.
-    // Shift the remaining markers into the new frame's local timeline.
-    newFrame.tweens.slice().forEach(tween => {
-      if (tween.playheadPosition < splitPosition) {
-        tween.remove();
-      } else {
-        tween.playheadPosition = tween.playheadPosition - splitPosition + 1;
-      }
-    });
-
-    // Give the new keyframe its own tween state so editing this keyframe
-    // changes the tween from this point forward.
-    if (splitTransformation) {
-      var existingStartTween = newFrame.getTweenAtPosition(1);
-      if (existingStartTween) {
-        existingStartTween.remove();
-      }
-      newFrame.addTween(new Wick.Tween({
-        playheadPosition: 1,
-        transformation: splitTransformation.copy()
-      }));
-    }
+    // Do not use addFrame()/resolveGaps() here: the original and copied
+    // frames already form one continuous pair and must not be altered.
     this.addChild(newFrame);
     return newFrame;
   }
@@ -49912,7 +49854,7 @@ Wick.Project = class extends Wick.Base {
     this._isMouseDown = false;
     this._internalErrorMessages = [];
     this.soundsPlayed = []; // List of all sounds that have been played during this play through of the project.
-    this.audioScrubSounds = {};
+
     this._mouseTargets = [];
     this._keysDown = [];
     this._keysLastDown = [];
@@ -50863,22 +50805,11 @@ Wick.Project = class extends Wick.Base {
    */
   tryToAutoCreateTween() {
     var frame = this.activeFrame;
-    if (!frame || frame.tweens.length === 0) return;
-    var playheadPosition = frame.getRelativePlayheadPosition();
-    var tween = frame.getTweenAtPosition(playheadPosition);
-    var clip = frame.clips[0];
-    if (tween && clip) {
-      // We are editing an existing tween keyframe.
-      // Store the edited clip transform on that tween keyframe.
-      tween.transformation = clip.transformation.copy();
-      return;
-    }
-    if (!tween) {
-      // We are between tween keyframes.
-      // Create a new keyframe using the edited/interpolated state.
+    if (frame.tweens.length > 0 && !frame.getTweenAtPosition(frame.getRelativePlayheadPosition())) {
       frame.createTween();
     }
   }
+
   /**
    * Move the right edge of all frames right one frame.
    */
@@ -51212,69 +51143,7 @@ Wick.Project = class extends Wick.Base {
   get muted() {
     return this._muted;
   }
-  playAudioScrubSounds() {
-    if (this.playing) return;
-    this.activeTimeline.layers.forEach(layer => {
-      const frame = layer.activeFrame;
-      if (!frame) return;
-      const frameUUID = frame.uuid,
-        soundAsset = frame.sound;
-      let stopPrevSound = false,
-        startNewSound = false,
-        moveExistingSound = false;
-      if (!(layer.uuid in this.audioScrubSounds)) {
-        if (soundAsset) {
-          startNewSound = true;
-          moveExistingSound = true;
-        }
-      } else if (!soundAsset) {
-        stopPrevSound = true;
-      } else if (frameUUID === this.audioScrubSounds[layer.uuid].frameUUID) {
-        moveExistingSound = true;
-      } else {
-        stopPrevSound = true;
-        startNewSound = true;
-        moveExistingSound = true;
-      }
-      if (stopPrevSound) {
-        this.audioScrubSounds[layer.uuid].stopSound();
-      }
-      if (startNewSound) {
-        this.audioScrubSounds[layer.uuid] = {
-          frameUUID,
-          soundAsset,
-          soundID: null,
-          autostopID: null,
-          playSound(options) {
-            if (this.autostopID) {
-              clearTimeout(this.autostopID);
-              soundAsset._howl.seek(options.seekMS / 1000, this.soundID);
-            } else {
-              this.soundID = soundAsset.play(options);
-            }
-            this.autostopID = setTimeout(this.stopSound, 1000 / soundAsset.project.framerate);
-          },
-          stopSound() {
-            soundAsset.stop(this.soundID);
-            clearTimeout(this.autostopID);
-            delete soundAsset.project.audioScrubSounds[layer.uuid];
-          }
-        };
-      }
-      if (moveExistingSound) {
-        this.audioScrubSounds[layer.uuid].playSound({
-          seekMS: frame.playheadSoundOffsetMS + frame.soundStart,
-          volume: frame.soundVolume,
-          loop: frame.soundLoop
-        });
-      }
-    });
-  }
-  stopAudioScrubSounds() {
-    for (const soundObj of Object.values(this.audioScrubSounds)) {
-      soundObj.stopSound();
-    }
-  }
+
   /**
    * Should the project render black bars around the canvas area?
    * (These only show up if the size of the window/element that the project
@@ -51398,7 +51267,6 @@ Wick.Project = class extends Wick.Base {
     window._scriptOnErrorCallback = args.onError;
     this._playing = true;
     this.view.paper.view.autoUpdate = false;
-    this.stopAudioScrubSounds();
     this.orderDynamicFrames();
     if (this._tickIntervalID) {
       this.stop();
@@ -56374,50 +56242,70 @@ Wick.Frame = class extends Wick.Tickable {
    * Automatically creates a tween at the current playhead position. Converts all objects into one clip if needed.
    */
   createTween() {
-    // Don't make a tween if one already exists at this position.
-    var playheadPosition = this.getRelativePlayheadPosition();
-    if (this.getTweenAtPosition(playheadPosition)) {
+    // Classic tweening works between this frame and the next keyframe.
+    if (!this.contentful) {
       return;
     }
 
-    // If more than one object exists on the frame, or if there is only one path,
-    // create a clip from those objects so they can be tweened together.
-    var clips = this.clips;
-    var paths = this.paths;
-    if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
-      var allDrawables = paths.concat(clips);
-      var center = this.project.selection.view._getObjectsBounds(allDrawables).center;
-      var clip = new Wick.Clip({
-        transformation: new Wick.Transformation({
-          x: center.x,
-          y: center.y
-        })
-      });
-      this.addClip(clip);
-      clip.addObjects(allDrawables);
+    // Convert drawable contents into one clip when necessary.
+    var ensureClip = function (frame) {
+      var clips = frame.clips;
+      var paths = frame.paths;
+      if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
+        var allDrawables = paths.concat(clips);
+        var center = frame.project.selection.view._getObjectsBounds(allDrawables).center;
+        var clip = new Wick.Clip({
+          transformation: new Wick.Transformation({
+            x: center.x,
+            y: center.y
+          })
+        });
+        frame.addClip(clip);
+        clip.addObjects(allDrawables);
+      }
+      return frame.clips[0] || null;
+    };
+    var sourceClip = ensureClip(this);
+    if (!sourceClip) {
+      return;
     }
-    var clip = this.clips[0];
-    var startTransformation = clip ? clip.transformation.copy() : new Wick.Transformation();
+    var startTransformation = sourceClip.transformation.copy();
+    var nextFrame = null;
 
-    // Create the starting tween.
-    this.addTween(new Wick.Tween({
-      playheadPosition: playheadPosition,
-      transformation: startTransformation
-    }));
+    // The frame immediately after this held frame is the destination keyframe.
+    if (this.parentLayer) {
+      var candidate = this.parentLayer.getFrameAtPlayheadPosition(this.end + 1);
+      if (candidate && candidate.start === this.end + 1 && candidate.contentful) {
+        nextFrame = candidate;
+      }
+    }
+    if (nextFrame && this.length > 1) {
+      var destinationClip = ensureClip(nextFrame);
+      if (destinationClip) {
+        var destinationTransformation = destinationClip.transformation.copy();
 
-    // If the next keyframe immediately follows this frame,
-    // create the ending tween on the last frame before it.
-    var nextFrame = this.parentLayer.frames.find(function (frame) {
-      return frame.start === this.end + 1;
-    }, this);
-    if (nextFrame && nextFrame.contentful) {
-      var nextClip = nextFrame.clips[0];
-      if (nextClip) {
+        // Start of the tween: original pose.
+        this.addTween(new Wick.Tween({
+          playheadPosition: 1,
+          transformation: startTransformation
+        }));
+
+        // End of the tween: exact pose of the next keyframe.
         this.addTween(new Wick.Tween({
           playheadPosition: this.length,
-          transformation: nextClip.transformation.copy()
+          transformation: destinationTransformation
         }));
+        return;
       }
+    }
+
+    // Fallback when there is no following keyframe.
+    var playheadPosition = this.getRelativePlayheadPosition();
+    if (!this.getTweenAtPosition(playheadPosition)) {
+      this.addTween(new Wick.Tween({
+        playheadPosition: playheadPosition,
+        transformation: startTransformation
+      }));
     }
   }
   /**
@@ -63881,14 +63769,8 @@ Wick.View.Project = class extends Wick.View {
       // We're in the root timeline, use the color given to us from the user (or use a default)
       this.canvas.style.backgroundColor = this.canvasBGColor || Wick.View.Project.DEFAULT_CANVAS_BG_COLOR;
     } else {
-      // We're inside a clip
-      if (this.model.toolSettings.getSetting('outsideClipShowBorder')) {
-        // Use the same color as the root
-        this.canvas.style.backgroundColor = this.canvasBGColor || Wick.View.Project.DEFAULT_CANVAS_BG_COLOR;
-      } else {
-        // Use the project background color as the container background color
-        this.canvas.style.backgroundColor = this.model.backgroundColor.hex;
-      }
+      // We're inside a clip, so use the project background color as the container background color
+      this.canvas.style.backgroundColor = this.model.backgroundColor.hex;
     }
   }
   _buildSVGCanvas() {
@@ -63904,10 +63786,6 @@ Wick.View.Project = class extends Wick.View {
     this._svgBackgroundLayer = new paper.Layer();
     this._svgBackgroundLayer.name = 'wick_project_bg';
     this._svgBackgroundLayer.remove();
-    this._svgOuterLayer = new paper.Layer();
-    this._svgOuterLayer.name = 'wick_project_outer';
-    this._svgOuterLayer.applyMatrix = false;
-    this._svgOuterLayer.remove();
     this._svgBordersLayer = new paper.Layer();
     this._svgBordersLayer.name = 'wick_project_borders';
     this._svgBordersLayer.remove();
@@ -63947,13 +63825,6 @@ Wick.View.Project = class extends Wick.View {
     this.paper.view.center = new paper.Point(-pan.x, -pan.y);
     this.paper.view.rotation = this.model.rotation;
 
-    // Add transformed objects layer before background
-    this._svgOuterLayer.removeChildren();
-    this._svgOuterLayer.matrix.set(new paper.Matrix());
-    this._svgOuterLayer.locked = true;
-    this._svgOuterLayer.opacity = 1;
-    this.paper.project.addLayer(this._svgOuterLayer);
-
     // Generate background layer
     this._svgBackgroundLayer.removeChildren();
     this._svgBackgroundLayer.locked = true;
@@ -63963,37 +63834,9 @@ Wick.View.Project = class extends Wick.View {
       var stage = this._generateSVGCanvasStage();
       this._svgBackgroundLayer.addChild(stage);
     } else {
-      // We're inside a clip, don't render the canvas BG directly, instead render a crosshair at (0,0)
+      // We're inside a clip, don't render the canvas BG, instead render a crosshair at (0,0)
       var originCrosshair = this._generateSVGOriginCrosshair();
       this._svgBackgroundLayer.addChild(originCrosshair);
-      if (this.model.toolSettings.getSetting('outsideClipStyle') !== 'none') {
-        if (this.model.toolSettings.getSetting('outsideClipShowBorder')) {
-          this._svgOuterLayer.addChild(this._generateSVGCanvasStage());
-        }
-        var rootTimeline = this.model.root.timeline;
-        var objectsGroup = new paper.Group();
-        this._svgOuterLayer.addChild(objectsGroup);
-        rootTimeline.view.render();
-        this.model.focus.view.group.remove();
-        rootTimeline.view.frameLayers.forEach(layer => {
-          objectsGroup.addChild(layer);
-        });
-
-        // Apply visual effects
-        var transformations = [];
-        var clipIteration = this.model.focus;
-        while (!clipIteration.isRoot) {
-          transformations.push(clipIteration.transformation);
-          clipIteration = clipIteration.parentClip;
-        }
-        transformations.reverse();
-        transformations.forEach(transform => {
-          this._svgOuterLayer.translate(-transform.x, -transform.y);
-          this._svgOuterLayer.rotate(-transform.rotation, new paper.Point());
-          this._svgOuterLayer.scale(1 / transform.scaleX, 1 / transform.scaleY, new paper.Point());
-        });
-        objectsGroup.opacity = this.model.toolSettings.getSetting('outsideClipStandardOpacity');
-      }
     }
 
     // Generate frame layers
@@ -66011,7 +65854,6 @@ Wick.GUIElement.Frame = class extends Wick.GUIElement {
     this._clickedEdge = this._mouseOverFrameEdge();
     var playheadPosition = this.model.start + Math.floor(this.localMouse.x / this.gridCellWidth);
     this.model.project.activeTimeline.playheadPosition = playheadPosition;
-    this.model.project.playAudioScrubSounds();
     if (this.model.isSelected) {
       if (e.shiftKey) {
         this.model.project.selection.deselect(this.model);
@@ -66969,7 +66811,6 @@ Wick.GUIElement.NumberLine = class extends Wick.GUIElement {
     var timeline = this.project.model.activeTimeline;
     if (timeline.playheadPosition !== this.mousePlayheadPosition) {
       timeline.playheadPosition = this.mousePlayheadPosition;
-      this.project.model.playAudioScrubSounds();
       this.projectWasSoftModified();
     }
   }
