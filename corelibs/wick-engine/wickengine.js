@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.7.17.43.12";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.7.18.24.23";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -49625,39 +49625,44 @@ Wick.Layer = class extends Wick.Base {
     var originalEnd = existingFrame.end;
     var splitPosition = playheadPosition - existingFrame.start + 1;
 
-    // Capture the exact visual state at the new keyframe before splitting.
+    // Classic tweens interpolate Wick.Clip transformations.
+    // Wrap raw artwork before making the keyframe so scaleX/scaleY,
+    // rotation and position are stored as tweenable values.
+    var ensureTweenClip = function (frame) {
+      var clips = frame.clips;
+      var paths = frame.paths;
+      if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
+        var allDrawables = paths.concat(clips);
+        var center = frame.project.selection.view._getObjectsBounds(allDrawables).center;
+        var clip = new Wick.Clip({
+          transformation: new Wick.Transformation({
+            x: center.x,
+            y: center.y
+          })
+        });
+        frame.addClip(clip);
+        clip.addObjects(allDrawables);
+      }
+      return frame.clips[0] || null;
+    };
+    ensureTweenClip(existingFrame);
     var splitTween = existingFrame.getActiveTween();
     var splitTransformation = splitTween ? splitTween.transformation.copy() : null;
-
-    // Copy the complete frame so the new keyframe has independent content.
     var newFrame = existingFrame.copy();
-
-    // Shorten the original frame to the left side of the new keyframe.
     existingFrame.end = playheadPosition - 1;
-
-    // Remove copied tween markers that are now outside the shortened frame.
     existingFrame.tweens.slice().forEach(tween => {
       if (tween.playheadPosition >= splitPosition) {
         tween.remove();
       }
     });
-
-    // Preserve the tween's exact state at the split as the endpoint
-    // of the left-hand tween segment.
     if (splitTransformation) {
       existingFrame.addTween(new Wick.Tween({
         playheadPosition: existingFrame.length,
         transformation: splitTransformation.copy()
       }));
     }
-
-    // The copied frame becomes the new keyframe and keeps the remainder
-    // of the original frame's duration.
     newFrame.start = playheadPosition;
     newFrame.end = originalEnd;
-
-    // Remove tween markers that belong before the new keyframe.
-    // Shift the remaining markers into the new frame's local timeline.
     newFrame.tweens.slice().forEach(tween => {
       if (tween.playheadPosition < splitPosition) {
         tween.remove();
@@ -49665,9 +49670,6 @@ Wick.Layer = class extends Wick.Base {
         tween.playheadPosition = tween.playheadPosition - splitPosition + 1;
       }
     });
-
-    // Give the new keyframe its own tween state so editing this keyframe
-    // changes the tween from this point forward.
     if (splitTransformation) {
       var existingStartTween = newFrame.getTweenAtPosition(1);
       if (existingStartTween) {
