@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.4.12.27.32";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.7.17.43.12";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -56359,45 +56359,50 @@ Wick.Frame = class extends Wick.Tickable {
    * Automatically creates a tween at the current playhead position. Converts all objects into one clip if needed.
    */
   createTween() {
-    // Don't make a tween if one already exists at this position.
+    // Classic tweens always begin at the first frame of the span.
     var playheadPosition = 1;
     if (this.getTweenAtPosition(playheadPosition)) {
       return;
     }
 
-    // If more than one object exists on the frame, or if there is only one path,
-    // create a clip from those objects so they can be tweened together.
-    var clips = this.clips;
-    var paths = this.paths;
-    if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
-      var allDrawables = paths.concat(clips);
-      var center = this.project.selection.view._getObjectsBounds(allDrawables).center;
-      var clip = new Wick.Clip({
-        transformation: new Wick.Transformation({
-          x: center.x,
-          y: center.y
-        })
-      });
-      this.addClip(clip);
-      clip.addObjects(allDrawables);
-    }
-    var clip = this.clips[0];
+    // Make a frame tweenable by wrapping multiple drawables, or a single
+    // path, inside one clip.
+    var ensureTweenClip = function (frame) {
+      var clips = frame.clips;
+      var paths = frame.paths;
+      if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
+        var allDrawables = paths.concat(clips);
+        var center = frame.project.selection.view._getObjectsBounds(allDrawables).center;
+        var clip = new Wick.Clip({
+          transformation: new Wick.Transformation({
+            x: center.x,
+            y: center.y
+          })
+        });
+        frame.addClip(clip);
+        clip.addObjects(allDrawables);
+      }
+      return frame.clips[0] || null;
+    };
+    var clip = ensureTweenClip(this);
     var startTransformation = clip ? clip.transformation.copy() : new Wick.Transformation();
 
-    // Create the starting tween.
+    // Create the starting tween at relative position 1.
     this.addTween(new Wick.Tween({
       playheadPosition: playheadPosition,
       transformation: startTransformation
     }));
 
-    // If the next keyframe immediately follows this frame,
-    // create the ending tween on the last frame before it.
+    // Find the keyframe immediately after this frame span.
+    // Keep that keyframe intact: it is the destination pose.
     var nextFrame = this.parentLayer.frames.find(function (frame) {
-      return frame.start === this.end + 1;
+      return frame.start === this.end + 1 && frame.length === 1 && frame.contentful;
     }, this);
-    if (nextFrame && nextFrame.contentful) {
-      var nextClip = nextFrame.clips[0];
+    if (nextFrame) {
+      var nextClip = ensureTweenClip(nextFrame);
       if (nextClip) {
+        // The final frame of the existing span gets the exact
+        // transformation of the following keyframe.
         this.addTween(new Wick.Tween({
           playheadPosition: this.length,
           transformation: nextClip.transformation.copy()
