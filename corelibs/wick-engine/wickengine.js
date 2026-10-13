@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.7.18.24.23";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.13.17.8.20";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -46742,6 +46742,9 @@ Wick.Transformation = class {
     this.scaleX = args.scaleX === undefined ? 1 : args.scaleX;
     this.scaleY = args.scaleY === undefined ? 1 : args.scaleY;
     this.rotation = args.rotation === undefined ? 0 : args.rotation;
+    // Skew angles are stored in degrees, matching Paper.js' skew API.
+    this.skewX = args.skewX === undefined ? 0 : args.skewX;
+    this.skewY = args.skewY === undefined ? 0 : args.skewY;
     this.opacity = args.opacity === undefined ? 1 : args.opacity;
   }
 
@@ -46755,6 +46758,8 @@ Wick.Transformation = class {
       scaleX: this.scaleX,
       scaleY: this.scaleY,
       rotation: this.rotation,
+      skewX: this.skewX,
+      skewY: this.skewY,
       opacity: this.opacity
     };
   }
@@ -53428,7 +53433,7 @@ Wick.Tween = class extends Wick.Base {
     var t = Wick.Tween._calculateTimeValue(tweenA, tweenB, playheadPosition);
 
     // Interpolate every transformation attribute using the t value
-    ["x", "y", "scaleX", "scaleY", "rotation", "opacity"].forEach(propName => {
+    ["x", "y", "scaleX", "scaleY", "rotation", "skewX", "skewY", "opacity"].forEach(propName => {
       var tweenFn = tweenA._getTweenFunction();
       var tt = tweenFn(t);
       var valA = tweenA.transformation[propName];
@@ -56366,6 +56371,140 @@ Wick.Frame = class extends Wick.Tickable {
     if (this.getTweenAtPosition(playheadPosition)) {
       return;
     }
+    var getDrawableBounds = function (frame) {
+      if (!frame.drawable.length) return null;
+      return frame.project.selection.view._getObjectsBounds(frame.drawable);
+    };
+
+    // Raw Wick paths store scale/rotation/skew in their geometry. Sample their
+    // anchors before wrapping either keyframe in a Clip so those transforms can
+    // be reconstructed as a classic-tween endpoint when the geometry is affine.
+    var getRawPathPoints = function (frame) {
+      return frame.paths.filter(path => !path.isPlaceholder).map(path => {
+        var points = [];
+        var visitItem = function (item) {
+          if (!item) return;
+          if (item.segments && item.segments.length) {
+            item.segments.forEach(segment => {
+              var point = item.localToGlobal(segment.point);
+              points.push({
+                x: point.x,
+                y: point.y
+              });
+            });
+          } else if (item.children) {
+            item.children.forEach(visitItem);
+          }
+        };
+        visitItem(path.view.item);
+        return points;
+      });
+    };
+    var inferAffineTweenTransformation = function (sourcePaths, targetPaths, center, bounds) {
+      if (!sourcePaths.length || sourcePaths.length !== targetPaths.length) return null;
+      var pairs = [];
+      for (var pathIndex = 0; pathIndex < sourcePaths.length; pathIndex++) {
+        var sourcePoints = sourcePaths[pathIndex];
+        var targetPoints = targetPaths[pathIndex];
+        if (!sourcePoints.length || sourcePoints.length !== targetPoints.length) return null;
+        for (var pointIndex = 0; pointIndex < sourcePoints.length; pointIndex++) {
+          pairs.push({
+            source: sourcePoints[pointIndex],
+            target: targetPoints[pointIndex]
+          });
+        }
+      }
+      if (pairs.length < 3) return null;
+
+      // Find three non-collinear source anchors for an affine fit.
+      var p0 = pairs[0].source;
+      var p1Index = -1;
+      var farthestDistance = 0;
+      for (var i = 1; i < pairs.length; i++) {
+        var dx = pairs[i].source.x - p0.x;
+        var dy = pairs[i].source.y - p0.y;
+        var distance = dx * dx + dy * dy;
+        if (distance > farthestDistance) {
+          farthestDistance = distance;
+          p1Index = i;
+        }
+      }
+      if (p1Index < 0) return null;
+      var p1 = pairs[p1Index].source;
+      var dx1 = p1.x - p0.x;
+      var dy1 = p1.y - p0.y;
+      var p2Index = -1;
+      var largestCross = 0;
+      for (var j = 1; j < pairs.length; j++) {
+        if (j === p1Index) continue;
+        var dx2Candidate = pairs[j].source.x - p0.x;
+        var dy2Candidate = pairs[j].source.y - p0.y;
+        var cross = Math.abs(dx1 * dy2Candidate - dx2Candidate * dy1);
+        if (cross > largestCross) {
+          largestCross = cross;
+          p2Index = j;
+        }
+      }
+      if (p2Index < 0 || largestCross < 1e-7) return null;
+      var p2 = pairs[p2Index].source;
+      var q0 = pairs[0].target;
+      var q1 = pairs[p1Index].target;
+      var q2 = pairs[p2Index].target;
+      var dx2 = p2.x - p0.x;
+      var dy2 = p2.y - p0.y;
+      var determinant = dx1 * dy2 - dx2 * dy1;
+      if (Math.abs(determinant) < 1e-9) return null;
+      var qdx1 = q1.x - q0.x;
+      var qdx2 = q2.x - q0.x;
+      var qdy1 = q1.y - q0.y;
+      var qdy2 = q2.y - q0.y;
+      var a = (qdx1 * dy2 - qdx2 * dy1) / determinant;
+      var c = (dx1 * qdx2 - dx2 * qdx1) / determinant;
+      var b = (qdy1 * dy2 - qdy2 * dy1) / determinant;
+      var d = (dx1 * qdy2 - dx2 * qdy1) / determinant;
+      var tx = q0.x - a * p0.x - c * p0.y;
+      var ty = q0.y - b * p0.x - d * p0.y;
+
+      // Reject the fit if the destination was redrawn rather than uniformly
+      // transformed. This keeps unrelated poses from becoming a bogus shear.
+      var squaredError = 0;
+      pairs.forEach(pair => {
+        var predictedX = a * pair.source.x + c * pair.source.y + tx;
+        var predictedY = b * pair.source.x + d * pair.source.y + ty;
+        var errorX = predictedX - pair.target.x;
+        var errorY = predictedY - pair.target.y;
+        squaredError += errorX * errorX + errorY * errorY;
+      });
+      var rmsError = Math.sqrt(squaredError / pairs.length);
+      var diagonal = bounds ? Math.sqrt(bounds.width * bounds.width + bounds.height * bounds.height) : 0;
+      if (rmsError > Math.max(0.75, diagonal * 0.025)) return null;
+
+      // Decompose the fitted affine matrix into scale, rotation, and horizontal
+      // skew. Paper.js applies skew after scale/rotation in View.Clip.
+      var scaleX = Math.sqrt(a * a + b * b);
+      var linearDeterminant = a * d - b * c;
+      if (!Number.isFinite(scaleX) || scaleX < 1e-7 || Math.abs(linearDeterminant) < 1e-9) return null;
+      var scaleY = linearDeterminant / scaleX;
+      var rotation = Math.atan2(b, a) * 180 / Math.PI;
+      var skewX = Math.atan((a * c + b * d) / (scaleX * scaleX)) * 180 / Math.PI;
+      return new Wick.Transformation({
+        x: a * center.x + c * center.y + tx,
+        y: b * center.x + d * center.y + ty,
+        scaleX: scaleX,
+        scaleY: scaleY,
+        rotation: rotation,
+        skewX: skewX,
+        skewY: 0,
+        opacity: 1
+      });
+    };
+    var startBounds = getDrawableBounds(this);
+    var startPathPoints = getRawPathPoints(this);
+    var startWasRawPathGeometry = this.clips.length === 0 && this.paths.length > 0;
+    var startCenter = startBounds ? startBounds.center : {
+      x: 0,
+      y: 0
+    };
 
     // Make a frame tweenable by wrapping multiple drawables, or a single
     // path, inside one clip.
@@ -56401,13 +56540,34 @@ Wick.Frame = class extends Wick.Tickable {
       return frame.start === this.end + 1 && frame.length === 1 && frame.contentful;
     }, this);
     if (nextFrame) {
+      // Snapshot target geometry before ensureTweenClip wraps paths in a Clip.
+      var destinationBounds = getDrawableBounds(nextFrame);
+      var destinationPathPoints = getRawPathPoints(nextFrame);
+      var destinationWasRawPathGeometry = nextFrame.clips.length === 0 && nextFrame.paths.length > 0;
+      var affineTransformation = null;
+      if (startWasRawPathGeometry && destinationWasRawPathGeometry) {
+        affineTransformation = inferAffineTweenTransformation(startPathPoints, destinationPathPoints, startCenter, startBounds);
+      }
       var nextClip = ensureTweenClip(nextFrame);
       if (nextClip) {
-        // The final frame of the existing span gets the exact
-        // transformation of the following keyframe.
+        var endTransformation = nextClip.transformation.copy();
+        if (affineTransformation) {
+          // This preserves position, squash/stretch, rotation, and skew
+          // that Wick had baked into the destination path geometry.
+          endTransformation = affineTransformation;
+        } else if (destinationWasRawPathGeometry && startBounds && destinationBounds) {
+          // Fallback for images/text/redrawn paths that cannot be point-matched.
+          // Infer squash/stretch from the frame bounds.
+          if (startBounds.width > 0 && destinationBounds.width > 0) {
+            endTransformation.scaleX = startTransformation.scaleX * destinationBounds.width / startBounds.width;
+          }
+          if (startBounds.height > 0 && destinationBounds.height > 0) {
+            endTransformation.scaleY = startTransformation.scaleY * destinationBounds.height / startBounds.height;
+          }
+        }
         this.addTween(new Wick.Tween({
           playheadPosition: this.length,
-          transformation: nextClip.transformation.copy()
+          transformation: endTransformation
         }));
       }
     }
@@ -64501,6 +64661,9 @@ Wick.View.Clip = class extends Wick.View {
     this.group.scaling.x = this.model.transformation.scaleX;
     this.group.scaling.y = this.model.transformation.scaleY;
     this.group.rotation = this.model.transformation.rotation;
+    this.group.data.wickSkewX = this.model.transformation.skewX;
+    this.group.data.wickSkewY = this.model.transformation.skewY;
+    this.group.skew(this.model.transformation.skewX, this.model.transformation.skewY);
     this.group.opacity = this.model.transformation.opacity;
   }
   generateBorder() {
@@ -64533,6 +64696,7 @@ Wick.View.Clip = class extends Wick.View {
     group.scaling.x = this.model.transformation.scaleX;
     group.scaling.y = this.model.transformation.scaleY;
     group.rotation = this.model.transformation.rotation;
+    group.skew(this.model.transformation.skewX, this.model.transformation.skewY);
     return group;
   }
 };
@@ -64801,6 +64965,8 @@ Wick.View.Frame = class extends Wick.View {
           scaleX: child.scaling.x,
           scaleY: child.scaling.y,
           rotation: child.rotation,
+          skewX: child.data.wickSkewX === undefined ? 0 : child.data.wickSkewX,
+          skewY: child.data.wickSkewY === undefined ? 0 : child.data.wickSkewY,
           opacity: child.opacity
         });
       }
