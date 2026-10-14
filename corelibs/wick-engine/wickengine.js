@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.13.17.8.20";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.14.18.24.36";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -46903,6 +46903,11 @@ Wick.ToolSettings = class {
       type: "boolean",
       name: 'outsideClipShowBorder',
       default: false
+    }, {
+      type: "choice",
+      name: 'cursorTransformMode',
+      default: 'freescale',
+      options: ['freescale', 'uniform', 'skew', 'skewscale']
     }];
   }
 
@@ -56856,6 +56861,7 @@ Wick.Clip = class extends Wick.Tickable {
     this._playedOnce = false;
     this._isSynced = false;
     this._transformation = args.transformation || new Wick.Transformation();
+    this._pivot = args.pivot || [0, 0];
     this.cursor = 'default';
     this._isClone = false;
     this._sourceClipUUID = null;
@@ -56870,6 +56876,7 @@ Wick.Clip = class extends Wick.Tickable {
   _serialize(args) {
     var data = super._serialize(args);
     data.transformation = this.transformation.values;
+    data.pivot = this._pivot;
     data.timeline = this._timeline;
     data.animationType = this._animationType;
     data.singleFrameNumber = this._singleFrameNumber;
@@ -56880,6 +56887,7 @@ Wick.Clip = class extends Wick.Tickable {
   _deserialize(data) {
     super._deserialize(data);
     this.transformation = new Wick.Transformation(data.transformation);
+    this.pivot = data.pivot || [0, 0];
     this._timeline = data.timeline;
     this._animationType = data.animationType || 'loop';
     this._singleFrameNumber = data.singleFrameNumber || 1;
@@ -57315,6 +57323,23 @@ Wick.Clip = class extends Wick.Tickable {
       if (tween) {
         tween.transformation = this._transformation.copy();
       }
+    }
+  }
+
+  /**
+   * The local registration point / pivot of this Clip.
+   * @type {number[]}
+   */
+  get pivot() {
+    return this._pivot || [0, 0];
+  }
+  set pivot(pivot) {
+    if (Array.isArray(pivot)) {
+      this._pivot = [Number(pivot[0]) || 0, Number(pivot[1]) || 0];
+    } else if (pivot && typeof pivot === 'object') {
+      this._pivot = [Number(pivot.x) || 0, Number(pivot.y) || 0];
+    } else {
+      this._pivot = [0, 0];
     }
   }
 
@@ -59269,6 +59294,7 @@ Wick.Tools.Cursor = class extends Wick.Tool {
 
     // Find the thing that is currently under the cursor.
     this.hitResult = this._updateHitResult(e);
+    this._widget.transformMode = this.getSetting('cursorTransformMode') || 'freescale';
 
     // Update the image being used for the cursor
     this._setCursor(this._getCursor());
@@ -59545,7 +59571,9 @@ Wick.Tools.Cursor = class extends Wick.Tool {
       angleRoundedToNearest45 = '' + angleRoundedToNearest45; // convert to string
       // Now we know which of eight directions the handle is pointing, so we choose the correct cursor
 
-      if (this.hitResult.item.data.handleType === 'scale') {
+      if (this.hitResult.item.data.handleType === 'pivot') {
+        return this.CURSOR_MOVE;
+      } else if (this.hitResult.item.data.handleType === 'scale') {
         var cursorGraphicFromAngle = {
           '0': this.CURSOR_SCALE_VERTICAL,
           '45': this.CURSOR_SCALE_TOP_RIGHT_BOTTOM_LEFT,
@@ -61971,6 +61999,7 @@ class SelectionWidget {
     this._item = new paper.Group({
       insert: false
     });
+    this.transformMode = 'freescale';
     let startPath = new paper.Path.Circle({
       radius: SelectionWidget.ENDPOINT_RADIUS,
       fillColor: SelectionWidget.BOX_STROKE_COLOR,
@@ -62132,6 +62161,16 @@ class SelectionWidget {
   get boundingBox() {
     return this._boundingBox;
   }
+  get transformMode() {
+    return this._transformMode;
+  }
+  set transformMode(transformMode) {
+    const validModes = ['freescale', 'uniform', 'skew', 'skewscale'];
+    this._transformMode = validModes.indexOf(transformMode) === -1 ? 'freescale' : transformMode;
+    this._skewMode = this._transformMode === 'skew' || this._transformMode === 'skewscale';
+    this._freescaleMode = this._transformMode !== 'uniform';
+    this._skewscaleMode = this._transformMode === 'skewscale';
+  }
 
   /**
    * The current transformation being done to the selection widget.
@@ -62141,7 +62180,7 @@ class SelectionWidget {
     return this._currentTransformation;
   }
   set currentTransformation(currentTransformation) {
-    if (['translate', 'scale', 'rotate', 'gradient-stop', 'gradient-point', 'gradient-none'].indexOf(currentTransformation) === -1) {
+    if (['translate', 'scale', 'rotate', 'move-pivot', 'gradient-stop', 'gradient-point', 'gradient-none'].indexOf(currentTransformation) === -1) {
       console.error('Paper.SelectionWidget: Invalid transformation type: ' + currentTransformation);
       currentTransformation = null;
     } else {
@@ -62182,6 +62221,9 @@ class SelectionWidget {
         this._buildGUI();
       }
       this.layer.addChild(this.item);
+      if (!args.useGradientGUI && this._pivotPointHandle) {
+        this._pivotPointHandle.bringToFront();
+      }
     }
   }
 
@@ -62194,13 +62236,18 @@ class SelectionWidget {
     }
     this._ghost = this._buildGhost();
     this._layer.addChild(this._ghost);
-    if (item.data.handleType === 'rotation') {
+    if (item.data.handleType === 'pivot') {
+      this.currentTransformation = 'move-pivot';
+      this._newPivot = this.pivot;
+      this._ghost.remove();
+    } else if (item.data.handleType === 'rotation') {
       this.currentTransformation = 'rotate';
     } else if (item.data.handleType === 'scale') {
       this.currentTransformation = 'scale';
     } else {
       this.currentTransformation = 'translate';
     }
+    this._initialPoint = e.point;
     this._ghost.data.initialPosition = this._ghost.position;
     this._ghost.data.scale = new paper.Point(1, 1);
   }
@@ -62209,8 +62256,15 @@ class SelectionWidget {
    *
    */
   updateTransformation(item, e) {
-    if (this.currentTransformation.substring(0, 8) === 'gradient') {
+    if (this.currentTransformation && this.currentTransformation.substring(0, 8) === 'gradient') {
       return this.updateGradientTransformation(item, e);
+    }
+    if (this.currentTransformation === 'move-pivot') {
+      const delta = e.point.subtract(this._initialPoint);
+      this._newPivot = this.pivot.add(delta);
+      item.matrix.reset();
+      item.position = this._newPivot;
+      return;
     }
     if (!this.mod || !this.mod.initiated) {
       this.mod = {
@@ -62237,12 +62291,13 @@ class SelectionWidget {
         this.mod.scaleFactor = this.mod.onePoint;
       }
     }
+
+    // XOR the chosen mode with modifier keys, matching Stickmanred.
     this.mod.modifiers = {
-      skew: e.modifiers.command,
-      // Skew when Ctrl/Cmd pressed
+      skew: this._skewMode === !e.modifiers.command,
       center: !e.modifiers.alt,
-      // Always scale from center unless Alt pressed
-      freescale: !e.modifiers.shift // Never retain proportions unless Shift pressed
+      freescale: this._freescaleMode === !e.modifiers.shift,
+      skewscale: this._skewscaleMode === !e.modifiers.shift
     };
     if (this.mod.action === 'translate') {
       var initialDelta = e.point.subtract(this.mod.initialPoint);
@@ -62313,7 +62368,7 @@ class SelectionWidget {
       this.mod.transformMatrix.reset();
       var currentPointRelative = e.point.rotate(-this.boxRotation, this.pivot);
       var initialPointRelative = this.mod.initialPoint.rotate(-this.boxRotation, this.pivot);
-      if (!this.mod.modifiers.skew || this.mod.modifiers.skew && e.modifiers.shift) {
+      if (!this.mod.modifiers.skew || this.mod.modifiers.skew && this.mod.modifiers.skewscale) {
         var scaleFactor = currentPointRelative.subtract(this.mod.truePivot).divide(initialPointRelative.subtract(this.mod.truePivot));
         if (this.mod.vertical) {
           scaleFactor.x = 1;
@@ -62351,8 +62406,15 @@ class SelectionWidget {
     if (this.currentTransformation.substring(0, 8) === 'gradient') {
       return this.finishGradientTransformation();
     }
-    this._ghost.remove();
-    if (this.mod.action === 'translate') {
+    if (this._ghost) this._ghost.remove();
+    if (this.currentTransformation === 'move-pivot') {
+      if (this._newPivot) {
+        this.pivot = this._newPivot;
+        if (this._itemsInSelection.length === 1 && this._itemsInSelection[0] instanceof paper.Group) {
+          this._itemsInSelection[0].pivot = this._itemsInSelection[0].globalToLocal(this._newPivot);
+        }
+      }
+    } else if (this.mod.action === 'translate') {
       this.translateSelection(this.mod.offset);
     } else if (this.mod.action === 'rotate') {
       this.rotateSelection(this._ghost.rotation);
@@ -62362,7 +62424,7 @@ class SelectionWidget {
       this.transformSelection(this.mod.transformMatrix, this.mod.truePivot);
     }
     this._currentTransformation = null;
-    this.mod.initiated = false;
+    if (this.mod) this.mod.initiated = false;
   }
 
   /**
@@ -62486,7 +62548,7 @@ class SelectionWidget {
       fillColor: SelectionWidget.PIVOT_FILL_COLOR,
       strokeColor: SelectionWidget.PIVOT_STROKE_COLOR
     });
-    handle.locked = true;
+    handle.locked = this.boundingBox.width <= 4 * handle.bounds.width && this.boundingBox.height <= 4 * handle.bounds.height;
     return handle;
   }
   _buildHandle(args) {
@@ -64655,15 +64717,18 @@ Wick.View.Clip = class extends Wick.View {
 
     //this._radius = null;
 
-    this.group.pivot = new this.paper.Point(0, 0);
+    const pivot = this.model.pivot || [0, 0];
+    this.group.pivot = new this.paper.Point(pivot[0], pivot[1]);
     this.group.position.x = this.model.transformation.x;
     this.group.position.y = this.model.transformation.y;
     this.group.scaling.x = this.model.transformation.scaleX;
     this.group.scaling.y = this.model.transformation.scaleY;
     this.group.rotation = this.model.transformation.rotation;
-    this.group.data.wickSkewX = this.model.transformation.skewX;
-    this.group.data.wickSkewY = this.model.transformation.skewY;
-    this.group.skew(this.model.transformation.skewX, this.model.transformation.skewY);
+    const skewX = this.model.transformation.skewX || 0;
+    const skewY = this.model.transformation.skewY || 0;
+    this.group.data.wickSkewX = skewX;
+    this.group.data.wickSkewY = skewY;
+    this.group.skew(skewX, skewY);
     this.group.opacity = this.model.transformation.opacity;
   }
   generateBorder() {
@@ -64690,13 +64755,14 @@ Wick.View.Clip = class extends Wick.View {
       insert: false
     });
     group.addChild(border);
-    group.pivot = new this.paper.Point(0, 0);
+    const pivot = this.model.pivot || [0, 0];
+    group.pivot = new this.paper.Point(pivot[0], pivot[1]);
     group.position.x = this.model.transformation.x;
     group.position.y = this.model.transformation.y;
     group.scaling.x = this.model.transformation.scaleX;
     group.scaling.y = this.model.transformation.scaleY;
     group.rotation = this.model.transformation.rotation;
-    group.skew(this.model.transformation.skewX, this.model.transformation.skewY);
+    group.skew(this.model.transformation.skewX || 0, this.model.transformation.skewY || 0);
     return group;
   }
 };
@@ -64969,6 +65035,7 @@ Wick.View.Frame = class extends Wick.View {
           skewY: child.data.wickSkewY === undefined ? 0 : child.data.wickSkewY,
           opacity: child.opacity
         });
+        wickClip.pivot = [child.pivot.x, child.pivot.y];
       }
     });
 
