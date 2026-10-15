@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.15.17.47.17";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.15.18.17.35";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -67202,12 +67202,14 @@ Wick.GUIElement.NumberLine = class extends Wick.GUIElement {
     ctx.stroke();
   }
   onMouseDown(e) {
+    this.project._playheadScrubbing = true;
     this._movePlayhead();
   }
   onMouseDrag(e) {
     this._movePlayhead();
   }
   onMouseUp(e) {
+    this.project._playheadScrubbing = false;
     this.projectWasModified();
   }
   get bounds() {
@@ -67929,6 +67931,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     this.draw();
   }
   _timeline_onMouseDown(e) {
+    this._playheadScrubbing = false;
     this.closePopupMenu();
     this.canvasClicked = true;
     this._clickXY = {
@@ -67946,12 +67949,20 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     this.draw();
   }
   _onMouseUp(e) {
-    // Call mouse event functions on the elements interacted with
-    var target = this._getTopMouseTarget();
-    if (this.canvasClicked && this._isDragging) {
-      target && target.onMouseUp(e);
-    } else if (this.canvasClicked && this._lastClickedElem === target) {
-      target && target.onMouseUp(e);
+    // A ruler-originated scrub must finish on the ruler even if the pointer
+    // crossed a frame or blank cell; never dispatch that mouse-up to frame handlers.
+    if (this._playheadScrubbing) {
+      var numberLine = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+      if (numberLine) numberLine.onMouseUp(e);
+      this._playheadScrubbing = false;
+    } else {
+      // Call mouse event functions on the elements interacted with
+      var target = this._getTopMouseTarget();
+      if (this.canvasClicked && this._isDragging) {
+        target && target.onMouseUp(e);
+      } else if (this.canvasClicked && this._lastClickedElem === target) {
+        target && target.onMouseUp(e);
+      }
     }
     this.canvasClicked = false;
     this._isDragging = false;
@@ -67964,6 +67975,15 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
   }
   _onMouseDrag(e) {
     this._isDragging = true;
+    if (this._playheadScrubbing) {
+      var scrubRuler = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+      if (scrubRuler) {
+        scrubRuler.mousePlayheadPosition = Math.floor((this._mouse.x - scrubRuler.localTranslation.x) / scrubRuler.gridCellWidth) + 1;
+        this.canvas.style.cursor = 'grabbing';
+        scrubRuler._movePlayhead();
+      }
+      return;
+    }
 
     // Call event functons on the elements interacted with
     var target = this._getTopMouseTarget();
