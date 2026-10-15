@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.14.18.24.36";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.15.17.47.17";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -51731,28 +51731,58 @@ Wick.Project = class extends Wick.Base {
     renderCopy.view.paper.view.autoUpdate = false;
     var frameImages = [];
     var numMaxFrameImages = renderCopy.focus.timeline.length;
+    var restored = false;
+    var restore = () => {
+      if (restored) return;
+      restored = true;
+      renderCopy.view.paper.view.autoUpdate = true;
+      this.view.canvasContainer = oldCanvasContainer;
+      this.view.resize();
+      this.history.loadSnapshot('before-gif-render');
+      this.publishedMode = false;
+      this.view.render();
+      window.document.body.removeChild(container);
+    };
+    var advance = () => {
+      var currentPos = renderCopy.focus.timeline.playheadPosition;
+      args.onProgress(currentPos, numMaxFrameImages);
+      if (currentPos >= numMaxFrameImages) {
+        restore();
+        args.onFinish(frameImages);
+      } else {
+        var oldPlayhead = renderCopy.activeTimeline.playheadPosition;
+        renderCopy.tick();
+        renderCopy.activeTimeline.playheadPosition = oldPlayhead + 1;
+        renderFrame();
+      }
+    };
+    var fail = error => {
+      restore();
+      if (args.onError) args.onError(error);else console.error(error);
+    };
     var renderFrame = () => {
+      // Streaming consumers finish processing this compressed frame before
+      // the next canvas render. GIF/image callers keep the existing API.
+      if (args.onFrame) {
+        try {
+          renderCopy.view.render();
+          renderCopy.view.paper.view.update();
+          renderCopy.view.canvas.toBlob(blob => {
+            if (!blob) {
+              fail(new Error('Failed to capture video frame'));
+              return;
+            }
+            Promise.resolve().then(() => args.onFrame(blob)).then(advance).catch(fail);
+          }, args.imageType);
+        } catch (error) {
+          fail(error);
+        }
+        return;
+      }
       var frameImage = new Image();
       frameImage.onload = () => {
         frameImages.push(frameImage);
-        var currentPos = renderCopy.focus.timeline.playheadPosition;
-        args.onProgress(currentPos, numMaxFrameImages);
-        if (currentPos >= numMaxFrameImages) {
-          // reset autoUpdate back to normal
-          renderCopy.view.paper.view.autoUpdate = true;
-          this.view.canvasContainer = oldCanvasContainer;
-          this.view.resize();
-          this.history.loadSnapshot('before-gif-render');
-          this.publishedMode = false;
-          this.view.render();
-          window.document.body.removeChild(container);
-          args.onFinish(frameImages);
-        } else {
-          var oldPlayhead = renderCopy.activeTimeline.playheadPosition;
-          renderCopy.tick();
-          renderCopy.activeTimeline.playheadPosition = oldPlayhead + 1;
-          renderFrame();
-        }
+        advance();
       };
       renderCopy.view.render();
       renderCopy.view.paper.view.update();

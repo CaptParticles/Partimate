@@ -1,7 +1,7 @@
 {
   "files": {
     "main.css": "./static/css/main.6f76fa32.css",
-    "main.js": "./static/js/main.3a1945ea.js",
+    "main.js": "./static/js/main.a0e17282.js",
     "static/media/cool_field3.png": "./static/media/cool_field3.17c4c0b571370d83875d.png",
     "static/media/search.svg": "./static/media/search.af8adee9f9abdfdb6633e4aff792f58d.svg",
     "static/media/layersDropdown.png": "./static/media/layersDropdown.2e1ace034119a56320ac.png",
@@ -173,18 +173,14 @@
     "static/media/frame.svg": "./static/media/frame.a2f52956fdd02952a8a0bd178581f91c.svg",
     "static/media/github-heart.svg": "./static/media/github-heart.367ad80812f66d2a379520a136ca1829.svg",
     "static/media/white-heart.svg": "./static/media/white-heart.a7488de9bcba4c2a5cf3be96e18661df.svg",
-    "static/media/cursor-transform-mode-freescale.svg": "./static/media/cursor-transform-mode-freescale.ab99790ba7b1d330ac020eff0a0f5fa4.svg",
     "static/media/hamburger.svg": "./static/media/hamburger.ecc12b5f0be51b5e2db4f3081cebc2f0.svg",
     "static/media/dropdown.svg": "./static/media/dropdown.7a000a457bd3248c018faa7ad34e86cd.svg",
     "static/media/timeline-icon-active.svg": "./static/media/timeline-icon-active.6b3d3cba3558e710fe551bd802573eea.svg",
-    "static/media/cursor-transform-mode-uniform.svg": "./static/media/cursor-transform-mode-uniform.bb34f8f768d148a7aa9b403b75351c36.svg",
     "static/media/timeline-icon.svg": "./static/media/timeline-icon.73ec800be0a9cb35bc209f4230fc0878.svg",
-    "static/media/cursor-transform-mode-skewscale.svg": "./static/media/cursor-transform-mode-skewscale.5af070510e30601c80607e9077f84df2.svg",
-    "static/media/empty_dropdown.svg": "./static/media/empty_dropdown.d22f2e7ff30a91d47ed5a4bb0b7ffe2b.svg",
-    "static/media/cursor-transform-mode-skew.svg": "./static/media/cursor-transform-mode-skew.8e6f5cbc2fd2ea1001d5b7b73e1ca016.svg"
+    "static/media/empty_dropdown.svg": "./static/media/empty_dropdown.d22f2e7ff30a91d47ed5a4bb0b7ffe2b.svg"
   },
   "entrypoints": [
     "static/css/main.6f76fa32.css",
-    "static/js/main.3a1945ea.js"
+    "static/js/main.a0e17282.js"
   ]
 }
