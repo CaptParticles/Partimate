@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.15.18.17.35";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.15.19.44.22";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -52829,17 +52829,27 @@ Wick.Selection = class extends Wick.Base {
         y: selectedObject.transformation.y
       };
     } else {
-      // Path selected or multiple objects selected: Reset rotation and use center for pivot point
+      // Paths and multiple selections use an unrotated transform widget.
       this._widgetRotation = 0;
-      var boundsCenter = this.view._getSelectedObjectsBounds().center;
-      this._pivotPoint = {
-        x: boundsCenter.x,
-        y: boundsCenter.y
-      };
+      var selectedBounds = this.view._getSelectedObjectsBounds();
+      if (this.numObjects === 1 && selectedObject instanceof Wick.Path && Array.isArray(selectedObject.pivot) && selectedObject.view && selectedObject.view.item) {
+        var localPivot = new paper.Point(selectedObject.pivot[0], selectedObject.pivot[1]);
+        var globalPivot = selectedObject.view.item.localToGlobal(localPivot);
+        this._pivotPoint = {
+          x: globalPivot.x,
+          y: globalPivot.y
+        };
+      } else {
+        var boundsCenter = selectedBounds.center;
+        this._pivotPoint = {
+          x: boundsCenter.x,
+          y: boundsCenter.y
+        };
+      }
 
       // Always pull original size values.
-      this._originalWidth = this.view._getSelectedObjectsBounds().width;
-      this._originalHeight = this.view._getSelectedObjectsBounds().height;
+      this._originalWidth = selectedBounds.width;
+      this._originalHeight = selectedBounds.height;
     }
   }
 
@@ -53669,6 +53679,7 @@ Wick.Path = class extends Wick.Base {
     this._fontWeight = 400;
     this._isPlaceholder = args.isPlaceholder;
     this._originalStyle = null;
+    this._pivot = args.pivot || null;
     if (args.path) {
       this.json = args.path.exportJSON({
         asString: false
@@ -53720,6 +53731,23 @@ Wick.Path = class extends Wick.Base {
   get classname() {
     return 'Path';
   }
+
+  /**
+   * Optional local pivot used by the transform widget.
+   * Stored separately from path JSON so it survives deselection and reload.
+   */
+  get pivot() {
+    return this._pivot ? this._pivot.slice() : null;
+  }
+  set pivot(value) {
+    if (Array.isArray(value) && value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+      this._pivot = [Number(value[0]), Number(value[1])];
+    } else if (value && typeof value === 'object' && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y))) {
+      this._pivot = [Number(value.x), Number(value.y)];
+    } else {
+      this._pivot = null;
+    }
+  }
   _serialize(args) {
     var data = super._serialize(args);
     data.json = this.json;
@@ -53744,6 +53772,7 @@ Wick.Path = class extends Wick.Base {
     data.fontStyle = this._fontStyle;
     data.fontWeight = this._fontWeight;
     data.isPlaceholder = this._isPlaceholder;
+    data.pivot = this._pivot;
     return data;
   }
   _deserialize(data) {
@@ -53752,6 +53781,7 @@ Wick.Path = class extends Wick.Base {
     this._fontStyle = data.fontStyle || 'normal';
     this._fontWeight = data.fontWeight || 400;
     this._isPlaceholder = data.isPlaceholder;
+    this._pivot = data.pivot || null;
   }
 
   /**
@@ -62440,7 +62470,7 @@ class SelectionWidget {
     if (this.currentTransformation === 'move-pivot') {
       if (this._newPivot) {
         this.pivot = this._newPivot;
-        if (this._itemsInSelection.length === 1 && this._itemsInSelection[0] instanceof paper.Group) {
+        if (this._itemsInSelection.length === 1 && this._itemsInSelection[0] && typeof this._itemsInSelection[0].globalToLocal === 'function') {
           this._itemsInSelection[0].pivot = this._itemsInSelection[0].globalToLocal(this._newPivot);
         }
       }
@@ -64728,7 +64758,11 @@ Wick.View.Clip = class extends Wick.View {
   render() {
     // Prevent an unselectable object from being rendered
     // due to a clip having no content on the first frame.
-    this.model.ensureActiveFrameIsContentful();
+    // A focused clip can legitimately have empty cells at its current playhead.
+    // Only ensure a selectable frame when this clip is being displayed from outside.
+    if (!this.model.isFocus) {
+      this.model.ensureActiveFrameIsContentful();
+    }
 
     // Render timeline view
     this.model.timeline.view.render();
@@ -65046,6 +65080,7 @@ Wick.View.Frame = class extends Wick.View {
         wickPath.fontWeight = originalWickPath ? originalWickPath.fontWeight : 400;
         wickPath.fontStyle = originalWickPath ? originalWickPath.fontStyle : 'normal';
         wickPath.identifier = originalWickPath ? originalWickPath.identifier : null;
+        wickPath.pivot = child.pivot ? [child.pivot.x, child.pivot.y] : originalWickPath && originalWickPath.pivot ? originalWickPath.pivot : null;
         child.name = wickPath.uuid;
       }
     }); // Update clip transforms
@@ -65175,6 +65210,9 @@ Wick.View.Path = class extends Wick.View {
       this._item.data.wickType = 'path';
     }
     this._item.fontWeight = `${this.model.fontWeight} ${this.model.fontStyle}`;
+    if (Array.isArray(this.model.pivot) && this.model.pivot.length >= 2) {
+      this._item.pivot = new this.paper.Point(this.model.pivot[0], this.model.pivot[1]);
+    }
     this.model.needReimport = false;
   }
 
@@ -66712,6 +66750,11 @@ Wick.GUIElement.FramesContainer = class extends Wick.GUIElement {
     }
   }
   onMouseUp(e) {
+    // A ruler-originated scrub is not a frame-grid click, even if hover targeting changes.
+    if (this.project._playheadScrubbing || this.project._lastClickedElem instanceof Wick.GUIElement.NumberLine) {
+      this._selectionBox = null;
+      return;
+    }
     if (this._selectionBox) {
       if (!e.shiftKey) {
         this.model.project.selection.clear();
@@ -67952,7 +67995,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     // A ruler-originated scrub must finish on the ruler even if the pointer
     // crossed a frame or blank cell; never dispatch that mouse-up to frame handlers.
     if (this._playheadScrubbing) {
-      var numberLine = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+      var numberLine = this._lastClickedElem instanceof Wick.GUIElement.NumberLine ? this._lastClickedElem : this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
       if (numberLine) numberLine.onMouseUp(e);
       this._playheadScrubbing = false;
     } else {
@@ -67975,8 +68018,8 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
   }
   _onMouseDrag(e) {
     this._isDragging = true;
-    if (this._playheadScrubbing) {
-      var scrubRuler = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+    if (this._playheadScrubbing || this._lastClickedElem instanceof Wick.GUIElement.NumberLine) {
+      var scrubRuler = this._lastClickedElem instanceof Wick.GUIElement.NumberLine ? this._lastClickedElem : this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
       if (scrubRuler) {
         scrubRuler.mousePlayheadPosition = Math.floor((this._mouse.x - scrubRuler.localTranslation.x) / scrubRuler.gridCellWidth) + 1;
         this.canvas.style.cursor = 'grabbing';
