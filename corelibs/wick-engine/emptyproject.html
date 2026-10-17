@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.15.19.44.22";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.17.11.18.14";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -62489,6 +62489,19 @@ class SelectionWidget {
           this._itemsInSelection[0].pivot = this._itemsInSelection[0].globalToLocal(this._newPivot);
         }
       }
+
+      // Save custom pivots immediately: moving a pivot does not modify the path geometry,
+      // so View.Frame.applyChanges() is not guaranteed to run for this action.
+      if (this._newPivot && this._itemsInSelection.length === 1) {
+        var pivotItem = this._itemsInSelection[0];
+        if (pivotItem && !(pivotItem instanceof paper.Group) && pivotItem.data && pivotItem.data.wickUUID && typeof pivotItem.globalToLocal === 'function') {
+          var pivotModel = Wick.ObjectCache.getObjectByUUID(pivotItem.data.wickUUID);
+          if (pivotModel instanceof Wick.Path) {
+            var localPivotPoint = pivotItem.globalToLocal(this._newPivot);
+            pivotModel.pivot = [localPivotPoint.x, localPivotPoint.y];
+          }
+        }
+      }
     } else if (this.mod.action === 'translate') {
       this.translateSelection(this.mod.offset);
     } else if (this.mod.action === 'rotate') {
@@ -67996,6 +68009,25 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
       x: e.clientX,
       y: e.clientY
     };
+    // A drag can start on the visible playhead head/line rather than on NumberLine itself.
+    // Capture either target as a ruler gesture before frame cells can receive mouse events.
+    var numberLine = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+    var playheadElement = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.Playhead);
+    var mouseDownTarget = this._getTopMouseTarget();
+    var clickIsPlayheadLine = false;
+    if (numberLine && playheadElement && this._mouse.y >= Wick.GUIElement.NUMBER_LINE_HEIGHT) {
+      var playheadStroke = Wick.GUIElement.PLAYHEAD_STROKE_WIDTH || 4;
+      var playheadLineX = playheadElement.localTranslation.x + (this.model.activeTimeline.playheadPosition - 1) * numberLine.gridCellWidth + numberLine.gridCellWidth / 2 - playheadStroke / 2 + 1.5;
+      clickIsPlayheadLine = Math.abs(this._mouse.x - playheadLineX) <= Math.max(4, playheadStroke);
+    }
+    if (numberLine && (mouseDownTarget instanceof Wick.GUIElement.NumberLine || mouseDownTarget instanceof Wick.GUIElement.Playhead || clickIsPlayheadLine)) {
+      this._playheadScrubbing = true;
+      this._lastClickedElem = numberLine;
+      numberLine.mousePlayheadPosition = Math.floor((this._mouse.x - numberLine.localTranslation.x) / numberLine.gridCellWidth) + 1;
+      numberLine.onMouseDown(e);
+      this.draw();
+      return;
+    }
     if (this._mouseHoverTargets.length === 0) {
       // Clicked nothing - clear the selection
       this.model.selection.clear();
