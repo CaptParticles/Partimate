@@ -1036,7 +1036,7 @@ class EditorCore extends Component {
                 const paddingCount = (base64.match(/=/g) || []).length;
                 const assetSize = Math.floor(base64.length / 4 * 3) - paddingCount;
                 if (assetSize !== file.size) continue; // fast size pre-check
-                // Decode first 88 base64 chars → first ≥64 raw bytes
+                // Decode first 88 base64 chars â†’ first â‰¥64 raw bytes
                 try {
                     const decoded = atob(base64.slice(0, 88));
                     const assetBytes = new Uint8Array(Math.min(64, decoded.length));
@@ -1138,7 +1138,7 @@ class EditorCore extends Component {
             } else if (acceptedFiles[i].type.startsWith('video/')) {
                 const mp4File = acceptedFiles[i];
                 const fps = Math.max(1, Math.min(60, Number(prompt('Enter FPS for ' + mp4File.name, String(this.project.framerate)) || this.project.framerate)));
-                const mp4ToastID = this.toast(`Importing ${mp4File.name}…`, 'info', { autoClose: false });
+                const mp4ToastID = this.toast(`Importing ${mp4File.name}â€¦`, 'info', { autoClose: false });
                 this.showWaitOverlay();
                 this.importMP4AsAsset({
                     file: mp4File,
@@ -1403,7 +1403,7 @@ class EditorCore extends Component {
 
         const onFinish = async (frameImages) => {
             try {
-                this.setState({ renderStatusMessage: "Building PDF…", renderProgress: 85 });
+                this.setState({ renderStatusMessage: "Building PDFâ€¦", renderProgress: 85 });
 
                 if (!frameImages || !frameImages.length) {
                     finishFail("PDF export failed: no frames rendered.");
@@ -1566,8 +1566,18 @@ class EditorCore extends Component {
             });
         }
 
-        let onError = (message) => {
-            console.error("Video Render had an error with message: ", message);
+        // stop the exporter
+        let onError = (error) => {
+            console.error('Video export failed:', error);
+            const message = 'Video export failed. Please try again. Error details are in the browser console.';
+            this.hideWaitOverlay();
+            this.setState({
+                exporting: false,
+                renderProgress: 0,
+                renderStatusMessage: message,
+            });
+            if (this.state.activeModalName === 'ExportMedia') this.closeActiveModal();
+            this.updateToast(toastID, { type: 'error', text: message });
         }
 
         let onFinish = (message) => {
@@ -1583,20 +1593,16 @@ class EditorCore extends Component {
         }
 
         // this.showWaitOverlay('Rendering video...');
-        VideoExport.renderVideo({
+        return VideoExport.renderVideo({
             project: this.project,
             width: args.width,
             height: args.height,
             onProgress: onProgress,
-            onError: () => {
-                this.hideWaitOverlay();
-                onError();
-            },
             onFinish: () => {
                 this.hideWaitOverlay();
                 onFinish();
             },
-        });
+        }).catch(onError);
     }
     /**
    * Export the current project as a video.
@@ -2119,7 +2125,7 @@ class EditorCore extends Component {
     cutSelectionToClipboard = () => {
         if (this.project.cutSelectionToClipboard()) {
             this.projectDidChange({ actionName: "Cut Selection" });
-            // Same stale-image marking as copy — skip in wick-only mode. -H.A.
+            // Same stale-image marking as copy â€” skip in wick-only mode. -H.A.
             if (this._getClipboardMode() !== 'wick') {
                 this._getClipboardImageFingerprint().then(fp => {
                     if (fp !== null) localStorage.setItem('wickEditorStaleClipboardFP', fp);
@@ -2171,7 +2177,7 @@ class EditorCore extends Component {
                 const bytes = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
                 const fp = blob.size + ':' + btoa(String.fromCharCode(...bytes));
                 const stale = localStorage.getItem('wickEditorStaleClipboardFP');
-                if (stale && fp === stale) return false; // stale — caller should use wick clipboard
+                if (stale && fp === stale) return false; // stale â€” caller should use wick clipboard
 
                 const ext = (imageType.split('/')[1] || 'png');
                 const rawName = 'pasted-image.' + ext;
@@ -2217,7 +2223,7 @@ class EditorCore extends Component {
     }
 
     /**
-     * Core paste handler — called from the document 'paste' event listener.
+     * Core paste handler â€” called from the document 'paste' event listener.
      * Uses e.clipboardData which gives us real File objects with filenames and etc. -H.A.
      */
     _handlePasteEvent = async (e) => {
@@ -2232,8 +2238,8 @@ class EditorCore extends Component {
 
         const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
 
-        // imageFile  — what gets imported (PNG JPEG etc. or TIFF→PNG converted)
-        // rawFileForFP — raw bytes used for fingerprint (must match _getClipboardImageFingerprint)
+        // imageFile  â€” what gets imported (PNG JPEG etc. or TIFFâ†’PNG converted)
+        // rawFileForFP â€” raw bytes used for fingerprint (must match _getClipboardImageFingerprint)
         let imageFile = null, rawFileForFP = null;
 
         // Pass 1: directly usable image formats (PNG, JPEG, GIF, WEBP)
@@ -2246,7 +2252,7 @@ class EditorCore extends Component {
             }
         }
 
-        // Pass 2: TIFF (macOS clipboard for Finder/app copies) → convert to PNG via canvas
+        // Pass 2: TIFF (macOS clipboard for Finder/app copies) â†’ convert to PNG via canvas
         if (!imageFile) {
             for (const item of items) {
                 if (item.kind !== 'file' || item.type !== 'image/tiff') continue;
@@ -2297,7 +2303,7 @@ class EditorCore extends Component {
                 const loc = { x: this._lastMouseX || 0, y: this._lastMouseY || 0 };
                 this.importFileAsAsset(finalFile, (asset) => {
                     if (!asset) {
-                        // import failed — mark this image as stale so future pastes
+                        // import failed â€” mark this image as stale so future pastes
                         localStorage.setItem('wickEditorStaleClipboardFP', fp);
                         if (this.project.pasteClipboardContents())
                             this.projectDidChange({ actionName: "Paste from Clipboard" });
@@ -2329,10 +2335,10 @@ class EditorCore extends Component {
             }
         }
 
-        // iOS Safari doesn't populate clipboardData with images — try Clipboard API as fallback
+        // iOS Safari doesn't populate clipboardData with images â€” try Clipboard API as fallback
         if (!imageFile && await this._tryImportSystemClipboardImage()) return;
 
-        // No image in paste event (or image was stale) — fall back to Wick clipboard
+        // No image in paste event (or image was stale) â€” fall back to Wick clipboard
         if (this.project.pasteClipboardContents()) {
             this.projectDidChange({ actionName: "Paste from Clipboard" });
         } else {
@@ -2450,7 +2456,7 @@ class EditorCore extends Component {
 
         // if file is a PDF, handle differently
         if (file.type === 'application/pdf') {
-            const toastID = this.toast(`Loading ${file.name}…`, 'info', { autoClose: false });
+            const toastID = this.toast(`Loading ${file.name}â€¦`, 'info', { autoClose: false });
             this.showWaitOverlay() // disable clicking anywhere
 
             // start up a new project
@@ -2510,7 +2516,7 @@ class EditorCore extends Component {
         // if an mp4 file then translate it before opening it
         try {
             const fps = Math.max(1, Math.min(60, Number(prompt("Enter FPS", String(this.project.framerate)) || this.project.framerate)));
-            const toastID = this.toast(`Loading ${file.name}…`, 'info', { autoClose: false });
+            const toastID = this.toast(`Loading ${file.name}â€¦`, 'info', { autoClose: false });
 
             // NOTE: must set up the new project BEFORE importing so assets have
             // somewhere to live (avoids stale-project console errors).
@@ -2518,7 +2524,7 @@ class EditorCore extends Component {
             this.projectDidChange({ actionName: 'Reset project' });
             this.showWaitOverlay();
 
-            // Extract frames + build GIF asset → adds everything to this.project
+            // Extract frames + build GIF asset â†’ adds everything to this.project
             // bakeAudio: false so we handle audio on the root timeline instead
             const { gifAsset, audioBlob, fps: extractedFps, projectName, width, height } =
                 await this.importMP4AsAsset({
@@ -2677,7 +2683,7 @@ function _pdf_buildFromJpegDataUrls(jpegDataUrls, imgW, imgH, pdfW, pdfH) {
 
         const imgName = `/Im${i}`
 
-        // Image XObject — use full pixel dimensions for crispness
+        // Image XObject â€” use full pixel dimensions for crispness
         const imgDict =
             `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} ` +
             `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpg.length} >>\nstream\n`
@@ -2688,12 +2694,12 @@ function _pdf_buildFromJpegDataUrls(jpegDataUrls, imgW, imgH, pdfW, pdfH) {
         ])
         const imgId = addObj(imgBody)
 
-        // Contents stream — scale image to fill pdfW x pdfH points
+        // Contents stream â€” scale image to fill pdfW x pdfH points
         const contents = `q ${pdfW} 0 0 ${pdfH} 0 0 cm ${imgName} Do Q\n`
         const contentsDict = `<< /Length ${contents.length} >>\nstream\n${contents}endstream\n`
         const contentsId = addObj(_pdf_strToU8(contentsDict))
 
-        // Page object — physical page size in points
+        // Page object â€” physical page size in points
         const pageObj =
             `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pdfW} ${pdfH}] ` +
             `/Resources << /XObject << ${imgName} ${imgId} 0 R >> >> ` +

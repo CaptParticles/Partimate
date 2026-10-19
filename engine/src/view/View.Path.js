@@ -96,6 +96,10 @@ Wick.View.Path = class extends Wick.View {
 
         this._item.fontWeight = `${this.model.fontWeight} ${this.model.fontStyle}`;
 
+        if (Array.isArray(this.model.pivot) && this.model.pivot.length >= 2) {
+            this._item.pivot = new this.paper.Point(this.model.pivot[0], this.model.pivot[1]);
+        }
+
         this.model.needReimport = false;
     }
 

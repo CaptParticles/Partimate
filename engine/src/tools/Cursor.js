@@ -67,6 +67,7 @@ Wick.Tools.Cursor = class extends Wick.Tool {
 
 		// Find the thing that is currently under the cursor.
 		this.hitResult = this._updateHitResult(e);
+        this._widget.transformMode = this.getSetting('cursorTransformMode') || 'freescale';
 
 		// Update the image being used for the cursor
 		this._setCursor(this._getCursor());
@@ -391,7 +392,9 @@ Wick.Tools.Cursor = class extends Wick.Tool {
 			angleRoundedToNearest45 = '' + angleRoundedToNearest45; // convert to string
 			// Now we know which of eight directions the handle is pointing, so we choose the correct cursor
 
-			if (this.hitResult.item.data.handleType === 'scale') {
+			if (this.hitResult.item.data.handleType === 'pivot') {
+                return this.CURSOR_MOVE;
+            } else if (this.hitResult.item.data.handleType === 'scale') {
 				var cursorGraphicFromAngle = {
 					'0': this.CURSOR_SCALE_VERTICAL,
 					'45': this.CURSOR_SCALE_TOP_RIGHT_BOTTOM_LEFT,

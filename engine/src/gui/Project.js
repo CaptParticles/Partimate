@@ -50,6 +50,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
 
         this._attachedDocumentEvents = [];
         this._attachedCanvasEvents = [];
+        this._mouseWheelHandler = this._onMouseWheel.bind(this);
 
     }
 
@@ -62,6 +63,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
         this._attachedDocumentEvents.push({
             event,
             fn: callback,
+            options: c,
         });
     }
 
@@ -74,6 +76,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
         this._attachedCanvasEvents.push({
             event,
             fn: callback,
+            options: c,
         });
     }
 
@@ -83,12 +86,27 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
      */
     removeAllEventListeners () {
         this._attachedDocumentEvents.forEach((evt) => {
-            document.removeEventListener(evt.event, evt.fn);
-        }); 
+            document.removeEventListener(evt.event, evt.fn, evt.options);
+        });
 
         this._attachedCanvasEvents.forEach((evt) => {
-            this._canvas.removeEventListener(evt.event, evt.fn);
+            this._canvas.removeEventListener(evt.event, evt.fn, evt.options);
         });
+
+        this._attachedDocumentEvents = [];
+        this._attachedCanvasEvents = [];
+
+        // jQuery listeners are not removed by DOM removeEventListener.
+        if (this._mouseWheelHandler && typeof $ !== 'undefined') {
+            $(this._canvas).off('mousewheel', this._mouseWheelHandler);
+        }
+
+        // A GUI can be disposed while an edge-drag autoscroll is active.
+        clearInterval(this.autoscrollInterval);
+        this.autoscrollInterval = null;
+        this.canvasClicked = false;
+        this._isDragging = false;
+        this._mouseEventsAttached = false;
     }
 
     /**
@@ -134,7 +152,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
             }, false);
 
             // Scroll events
-            $(this._canvas).on('mousewheel', this._onMouseWheel.bind(this));
+            $(this._canvas).on('mousewheel', this._mouseWheelHandler);
 
             // Touch events
             this.createCanvasEvent('touchstart', e => {
@@ -424,9 +442,32 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     }
 
     _timeline_onMouseDown (e) {
+        this._playheadScrubbing = false;
         this.closePopupMenu();
         this.canvasClicked = true;
         this._clickXY = {x: e.clientX, y: e.clientY};
+        // A drag can start on the visible playhead head/line rather than on NumberLine itself.
+        // Capture either target as a ruler gesture before frame cells can receive mouse events.
+        var numberLine = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+        var playheadElement = this._drawnElements.find(elem => elem instanceof Wick.GUIElement.Playhead);
+        var mouseDownTarget = this._getTopMouseTarget();
+        var clickIsPlayheadLine = false;
+        if (numberLine && playheadElement && this._mouse.y >= Wick.GUIElement.NUMBER_LINE_HEIGHT) {
+            var playheadStroke = Wick.GUIElement.PLAYHEAD_STROKE_WIDTH || 4;
+            var playheadLineX = playheadElement.localTranslation.x +
+                (this.model.activeTimeline.playheadPosition - 1) * numberLine.gridCellWidth +
+                numberLine.gridCellWidth / 2 - playheadStroke / 2 + 1.5;
+            clickIsPlayheadLine = Math.abs(this._mouse.x - playheadLineX) <= Math.max(4, playheadStroke);
+        }
+        if (numberLine && (mouseDownTarget instanceof Wick.GUIElement.NumberLine ||
+                           mouseDownTarget instanceof Wick.GUIElement.Playhead || clickIsPlayheadLine)) {
+            this._playheadScrubbing = true;
+            this._lastClickedElem = numberLine;
+            numberLine.mousePlayheadPosition = Math.floor((this._mouse.x - numberLine.localTranslation.x) / numberLine.gridCellWidth) + 1;
+            numberLine.onMouseDown(e);
+            this.draw();
+            return;
+        }
 
         if(this._mouseHoverTargets.length === 0) {
             // Clicked nothing - clear the selection
@@ -441,12 +482,20 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     }
 
     _onMouseUp (e) {
-        // Call mouse event functions on the elements interacted with
-        var target = this._getTopMouseTarget();
-        if(this.canvasClicked && this._isDragging) {
-            target && target.onMouseUp(e);
-        } else if (this.canvasClicked && this._lastClickedElem === target) {
-            target && target.onMouseUp(e);
+        // A ruler-originated scrub must finish on the ruler even if the pointer
+        // crossed a frame or blank cell; never dispatch that mouse-up to frame handlers.
+        if (this._playheadScrubbing) {
+            var numberLine = this._lastClickedElem instanceof Wick.GUIElement.NumberLine ? this._lastClickedElem : this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+            if (numberLine) numberLine.onMouseUp(e);
+            this._playheadScrubbing = false;
+        } else {
+            // Call mouse event functions on the elements interacted with
+            var target = this._getTopMouseTarget();
+            if(this.canvasClicked && this._isDragging) {
+                target && target.onMouseUp(e);
+            } else if (this.canvasClicked && this._lastClickedElem === target) {
+                target && target.onMouseUp(e);
+            }
         }
 
         this.canvasClicked = false;
@@ -463,6 +512,15 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
 
     _onMouseDrag (e) {
         this._isDragging = true;
+        if (this._playheadScrubbing || this._lastClickedElem instanceof Wick.GUIElement.NumberLine) {
+            var scrubRuler = this._lastClickedElem instanceof Wick.GUIElement.NumberLine ? this._lastClickedElem : this._drawnElements.find(elem => elem instanceof Wick.GUIElement.NumberLine);
+            if (scrubRuler) {
+                scrubRuler.mousePlayheadPosition = Math.floor((this._mouse.x - scrubRuler.localTranslation.x) / scrubRuler.gridCellWidth) + 1;
+                this.canvas.style.cursor = 'grabbing';
+                scrubRuler._movePlayhead();
+            }
+            return;
+        }
 
         // Call event functons on the elements interacted with
         var target = this._getTopMouseTarget();

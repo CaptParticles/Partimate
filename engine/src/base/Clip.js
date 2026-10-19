@@ -53,6 +53,7 @@ Wick.Clip = class extends Wick.Tickable {
         this._isSynced = false;
 
         this._transformation = args.transformation || new Wick.Transformation();
+        this._pivot = args.pivot || [0, 0];
 
         this.cursor = 'default';
 
@@ -74,6 +75,7 @@ Wick.Clip = class extends Wick.Tickable {
         var data = super._serialize(args);
 
         data.transformation = this.transformation.values;
+        data.pivot = this._pivot;
         data.timeline = this._timeline;
         data.animationType = this._animationType;
         data.singleFrameNumber = this._singleFrameNumber;
@@ -87,6 +89,7 @@ Wick.Clip = class extends Wick.Tickable {
         super._deserialize(data);
 
         this.transformation = new Wick.Transformation(data.transformation);
+        this.pivot = data.pivot || [0, 0];
         this._timeline = data.timeline;
         this._animationType = data.animationType || 'loop';
         this._singleFrameNumber = data.singleFrameNumber || 1;
@@ -546,6 +549,24 @@ Wick.Clip = class extends Wick.Tickable {
             if (tween) {
                 tween.transformation = this._transformation.copy();
             }
+        }
+    }
+
+    /**
+     * The local registration point / pivot of this Clip.
+     * @type {number[]}
+     */
+    get pivot() {
+        return this._pivot || [0, 0];
+    }
+
+    set pivot(pivot) {
+        if (Array.isArray(pivot)) {
+            this._pivot = [Number(pivot[0]) || 0, Number(pivot[1]) || 0];
+        } else if (pivot && typeof pivot === 'object') {
+            this._pivot = [Number(pivot.x) || 0, Number(pivot.y) || 0];
+        } else {
+            this._pivot = [0, 0];
         }
     }
 

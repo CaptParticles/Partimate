@@ -34,6 +34,7 @@ Wick.Path = class extends Wick.Base {
         this._fontWeight = 400;
         this._isPlaceholder = args.isPlaceholder;
         this._originalStyle = null;
+        this._pivot = args.pivot || null;
 
         if(args.path) {
             this.json = args.path.exportJSON({asString:false});
@@ -83,6 +84,24 @@ Wick.Path = class extends Wick.Base {
         return 'Path';
     }
 
+    /**
+     * Optional local pivot used by the transform widget.
+     * Stored separately from path JSON so it survives deselection and reload.
+     */
+    get pivot() {
+        return this._pivot ? this._pivot.slice() : null;
+    }
+
+    set pivot(value) {
+        if (Array.isArray(value) && value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+            this._pivot = [Number(value[0]), Number(value[1])];
+        } else if (value && typeof value === 'object' && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y))) {
+            this._pivot = [Number(value.x), Number(value.y)];
+        } else {
+            this._pivot = null;
+        }
+    }
+
     _serialize(args) {
         var data = super._serialize(args);
 
@@ -109,6 +128,7 @@ Wick.Path = class extends Wick.Base {
         data.fontStyle = this._fontStyle;
         data.fontWeight = this._fontWeight;
         data.isPlaceholder = this._isPlaceholder;
+        data.pivot = this._pivot;
 
         return data;
     }
@@ -119,6 +139,7 @@ Wick.Path = class extends Wick.Base {
         this._fontStyle = data.fontStyle || 'normal';
         this._fontWeight = data.fontWeight || 400;
         this._isPlaceholder = data.isPlaceholder;
+        this._pivot = data.pivot || null;
     }
 
     /**

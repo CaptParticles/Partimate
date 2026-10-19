@@ -177,6 +177,7 @@ class Editor extends EditorCore {
             showLayersCanvasActions: false,
             showAlignmentCanvasActions: false,
             showBrushModes: false,
+            showCursorTransformModes: false,
             showCodeErrors: false,
             codeError: null,
             popoutOutlinerSize: 250,
@@ -425,6 +426,38 @@ class Editor extends EditorCore {
         document.removeEventListener('mousemove', this._mouseMoveHandler);
         document.removeEventListener('paste', this._pasteHandler);
         window.removeEventListener('resize', this.resizeProps.onWindowResize);
+        window.clearTimeout(this._showWaitOverlayTimeoutID);
+        if (this._updateLastTouchTimeHandler) document.removeEventListener('touchstart', this._updateLastTouchTimeHandler, true);
+        if (this._disableHoverHandler) document.removeEventListener('touchstart', this._disableHoverHandler, true);
+        if (this._enableHoverHandler) document.removeEventListener('mousemove', this._enableHoverHandler, true);
+        this._hoverHandlersAttached = false;
+        // Partimate hours-stability: stop playback and dispose GUI listeners.
+        if (this.project && this.project._tickIntervalID) {
+            const previousScriptErrorHandler = window._scriptOnErrorCallback;
+            try {
+                // Avoid invoking an editor setState callback while React is unmounting.
+                window._scriptOnErrorCallback = null;
+                this.project.stop();
+            } catch (stopError) {
+                console.warn('Failed to stop Partimate playback during editor unmount:', stopError);
+                window.clearInterval(this.project._tickIntervalID);
+                this.project._tickIntervalID = null;
+                this.project._playing = false;
+                if (this.project.view && this.project.view.paper && this.project.view.paper.view) {
+                    this.project.view.paper.view.autoUpdate = true;
+                }
+            } finally {
+                if (previousScriptErrorHandler) {
+                    window._scriptOnErrorCallback = previousScriptErrorHandler;
+                } else {
+                    delete window._scriptOnErrorCallback;
+                }
+            }
+        }
+        if (this.project && this.project.guiElement &&
+            typeof this.project.guiElement.removeAllEventListeners === 'function') {
+            this.project.guiElement.removeAllEventListeners();
+        }
     }
 
     componentDidUpdate = (prevProps, prevState) => {
@@ -461,33 +494,27 @@ class Editor extends EditorCore {
     // Detects if the device has hover capability. Adds "hasHover" to the body to avoid 'Sticky-hover' on touch devices.
     // https://stackoverflow.com/questions/23885255/how-to-remove-ignore-hover-css-style-on-touch-devices
     watchForHover = () => {
-        // lastTouchTime is used for ignoring emulated mousemove events
-        let lastTouchTime = 0
+        // Keep stable references so document listeners can be removed on unmount.
+        if (this._hoverHandlersAttached) return;
 
-        function enableHover() {
-            if (new Date() - lastTouchTime < 500) return
-            document.body.classList.add('hasHover')
-        }
+        this._hoverLastTouchTime = 0;
+        this._enableHoverHandler = () => {
+            if (Date.now() - this._hoverLastTouchTime < 500) return;
+            document.body.classList.add('hasHover');
+        };
+        this._disableHoverHandler = () => {
+            document.body.classList.remove('hasHover');
+        };
+        this._updateLastTouchTimeHandler = () => {
+            this._hoverLastTouchTime = Date.now();
+        };
 
-        function disableHover() {
-            document.body.classList.remove('hasHover')
-        }
-
-        function updateLastTouchTime() {
-            lastTouchTime = new Date()
-        }
-
-        document.addEventListener('touchstart', updateLastTouchTime, true)
-        document.addEventListener('touchstart', disableHover, true)
-        document.addEventListener('mousemove', enableHover, true)
-
-        enableHover()
-    }
-
-
-
-    //
-
+        document.addEventListener('touchstart', this._updateLastTouchTimeHandler, true);
+        document.addEventListener('touchstart', this._disableHoverHandler, true);
+        document.addEventListener('mousemove', this._enableHoverHandler, true);
+        this._hoverHandlersAttached = true;
+        this._enableHoverHandler();
+    };
     hidePreloader = () => {
         let preloader = window.document.getElementById('preloader');
         setTimeout(() => {
@@ -818,6 +845,16 @@ class Editor extends EditorCore {
 
         this.setState({
             showBrushModes: state,
+        });
+    }
+
+    toggleCursorTransformModes = (state) => {
+        if (state === undefined || (typeof state !== "boolean")) {
+            state = !this.state.showCursorTransformModes;
+        }
+        this.setState({
+            showBrushModes: false,
+            showCursorTransformModes: state
         });
     }
 
@@ -1189,11 +1226,13 @@ class Editor extends EditorCore {
                                                 showLayersCanvasActions={this.state.showLayersCanvasActions}
                                                 showAlignmentCanvasActions={this.state.showAlignmentCanvasActions}
                                                 showBrushModes={this.state.showBrushModes}
+                                                showCursorTransformModes={this.state.showCursorTransformModes}
                                                 toggleCanvasActions={this.toggleCanvasActions}
                                                 toggleBooleanCanvasActions={this.toggleBooleanCanvasActions}
                                                 toggleLayersCanvasActions={this.toggleLayersCanvasActions}
                                                 toggleAlignmentCanvasActions={this.toggleAlignmentCanvasActions}
                                                 toggleBrushModes={this.toggleBrushModes}
+                                                toggleCursorTransformModes={this.toggleCursorTransformModes}
                                                 colorPickerType={this.state.colorPickerType}
                                                 changeColorPickerType={this.changeColorPickerType}
                                                 updateLastColors={this.updateLastColors}

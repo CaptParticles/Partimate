@@ -108,6 +108,7 @@ Wick.GUIElement.NumberLine = class extends Wick.GUIElement {
     }
 
     onMouseDown (e) {
+        this.project._playheadScrubbing = true;
         this._movePlayhead();
     }
 
@@ -116,6 +117,7 @@ Wick.GUIElement.NumberLine = class extends Wick.GUIElement {
     }
 
     onMouseUp (e) {
+        this.project._playheadScrubbing = false;
         this.projectWasModified();
     }
 

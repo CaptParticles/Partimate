@@ -27,6 +27,7 @@ class SelectionWidget {
 
         this._layer = args.layer;
         this._item = new paper.Group({ insert:false });
+        this.transformMode = 'freescale';
 
         let startPath = new paper.Path.Circle({
             radius: SelectionWidget.ENDPOINT_RADIUS,
@@ -196,6 +197,18 @@ class SelectionWidget {
         return this._boundingBox
     }
 
+    get transformMode() {
+        return this._transformMode;
+    }
+
+    set transformMode(transformMode) {
+        const validModes = ['freescale', 'uniform', 'skew', 'skewscale'];
+        this._transformMode = validModes.indexOf(transformMode) === -1 ? 'freescale' : transformMode;
+        this._skewMode = this._transformMode === 'skew' || this._transformMode === 'skewscale';
+        this._freescaleMode = this._transformMode !== 'uniform';
+        this._skewscaleMode = this._transformMode === 'skewscale';
+    }
+
     /**
      * The current transformation being done to the selection widget.
      * @type {string}
@@ -205,7 +218,7 @@ class SelectionWidget {
     }
 
     set currentTransformation(currentTransformation) {
-        if(['translate', 'scale', 'rotate', 'gradient-stop', 'gradient-point', 'gradient-none'].indexOf(currentTransformation) === -1) {
+        if(['translate', 'scale', 'rotate', 'move-pivot', 'gradient-stop', 'gradient-point', 'gradient-none'].indexOf(currentTransformation) === -1) {
             console.error('Paper.SelectionWidget: Invalid transformation type: ' + currentTransformation);
             currentTransformation = null;
         } else {
@@ -251,6 +264,9 @@ class SelectionWidget {
                 this._buildGUI();
             }
             this.layer.addChild(this.item);
+            if (!args.useGradientGUI && this._pivotPointHandle) {
+                this._pivotPointHandle.bringToFront();
+            }
         }
     }
 
@@ -265,7 +281,11 @@ class SelectionWidget {
         this._ghost = this._buildGhost();
         this._layer.addChild(this._ghost);
 
-        if (item.data.handleType === 'rotation') {
+        if (item.data.handleType === 'pivot') {
+            this.currentTransformation = 'move-pivot';
+            this._newPivot = this.pivot;
+            this._ghost.remove();
+        } else if (item.data.handleType === 'rotation') {
             this.currentTransformation = 'rotate';
         } else if (item.data.handleType === 'scale') {
             this.currentTransformation = 'scale';
@@ -273,6 +293,7 @@ class SelectionWidget {
             this.currentTransformation = 'translate';
         }
 
+        this._initialPoint = e.point;
         this._ghost.data.initialPosition = this._ghost.position;
         this._ghost.data.scale = new paper.Point(1, 1);
     }
@@ -281,8 +302,16 @@ class SelectionWidget {
      *
      */
     updateTransformation (item, e) {
-        if(this.currentTransformation.substring(0,8) === 'gradient') {
+        if(this.currentTransformation && this.currentTransformation.substring(0,8) === 'gradient') {
             return this.updateGradientTransformation(item, e);
+        }
+
+        if (this.currentTransformation === 'move-pivot') {
+            const delta = e.point.subtract(this._initialPoint);
+            this._newPivot = this.pivot.add(delta);
+            item.matrix.reset();
+            item.position = this._newPivot;
+            return;
         }
 
         if (!this.mod || !this.mod.initiated) {
@@ -316,10 +345,12 @@ class SelectionWidget {
             }
         }
 
+        // XOR the chosen mode with modifier keys, matching Stickmanred.
         this.mod.modifiers = {
-            skew: e.modifiers.command, // Skew when Ctrl/Cmd pressed
-            center: !e.modifiers.alt, // Always scale from center unless Alt pressed
-            freescale: !e.modifiers.shift // Never retain proportions unless Shift pressed
+            skew: this._skewMode === !e.modifiers.command,
+            center: !e.modifiers.alt,
+            freescale: this._freescaleMode === !e.modifiers.shift,
+            skewscale: this._skewscaleMode === !e.modifiers.shift
         }
 
         if (this.mod.action === 'translate') {
@@ -401,7 +432,7 @@ class SelectionWidget {
             var currentPointRelative = e.point.rotate(-this.boxRotation, this.pivot);
             var initialPointRelative = this.mod.initialPoint.rotate(-this.boxRotation, this.pivot);
 
-            if (!this.mod.modifiers.skew || (this.mod.modifiers.skew && e.modifiers.shift)) {
+            if (!this.mod.modifiers.skew || (this.mod.modifiers.skew && this.mod.modifiers.skewscale)) {
                 var scaleFactor = currentPointRelative.subtract(this.mod.truePivot).divide(initialPointRelative.subtract(this.mod.truePivot));
                 if (this.mod.vertical) {
                     scaleFactor.x = 1;
@@ -442,9 +473,29 @@ class SelectionWidget {
             return this.finishGradientTransformation();
         }
 
-        this._ghost.remove();
+        if (this._ghost) this._ghost.remove();
 
-        if (this.mod.action === 'translate') {
+        if (this.currentTransformation === 'move-pivot') {
+            if (this._newPivot) {
+                this.pivot = this._newPivot;
+                if (this._itemsInSelection.length === 1 && this._itemsInSelection[0] && typeof this._itemsInSelection[0].globalToLocal === 'function') {
+                    this._itemsInSelection[0].pivot = this._itemsInSelection[0].globalToLocal(this._newPivot);
+                }
+            }
+
+            // Save custom pivots immediately: moving a pivot does not modify the path geometry,
+            // so View.Frame.applyChanges() is not guaranteed to run for this action.
+            if (this._newPivot && this._itemsInSelection.length === 1) {
+                var pivotItem = this._itemsInSelection[0];
+                if (pivotItem && !(pivotItem instanceof paper.Group) && pivotItem.data &&
+                    pivotItem.data.wickUUID && typeof pivotItem.globalToLocal === 'function') {
+                    var pivotModel = Wick.ObjectCache.getObjectByUUID(pivotItem.data.wickUUID);
+                    if (pivotModel instanceof Wick.Path) {
+                        var localPivotPoint = pivotItem.globalToLocal(this._newPivot);
+                        pivotModel.pivot = [localPivotPoint.x, localPivotPoint.y];
+                    }
+                }
+            }} else if (this.mod.action === 'translate') {
             this.translateSelection(this.mod.offset);
         } else if (this.mod.action === 'rotate') {
             this.rotateSelection(this._ghost.rotation);
@@ -455,7 +506,7 @@ class SelectionWidget {
         }
 
         this._currentTransformation = null;
-        this.mod.initiated = false;
+        if (this.mod) this.mod.initiated = false;
     }
 
     /**
@@ -591,7 +642,7 @@ class SelectionWidget {
             fillColor: SelectionWidget.PIVOT_FILL_COLOR,
             strokeColor: SelectionWidget.PIVOT_STROKE_COLOR,
         });
-        handle.locked = true;
+        handle.locked = (this.boundingBox.width <= 4 * handle.bounds.width) && (this.boundingBox.height <= 4 * handle.bounds.height);
         return handle;
     }
 

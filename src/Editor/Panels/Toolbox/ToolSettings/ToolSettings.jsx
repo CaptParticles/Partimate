@@ -62,7 +62,56 @@ class ToolSettings extends Component {
   // Selection contents and properties
   renderCursorSettings = () => {
     return (
-      <div className='settings-input-container'></div>
+      <div className='settings-input-container'>
+        {this.renderCursorTransformMode()}
+      </div>
+    );
+  }
+
+  renderCursorTransformMode = () => {
+    const mode = this.props.getToolSetting('cursorTransformMode') || 'freescale';
+    const icons = {
+      freescale: 'cursortransformmodefreescale',
+      uniform: 'cursortransformmodeuniform',
+      skew: 'cursortransformmodeskew',
+      skewscale: 'cursortransformmodeskewscale'
+    };
+    return (
+      <div id="cursor-transform-modes-popover-button">
+        <ToolSettingsInput renderSize={this.props.renderSize}
+          name='Transform Modes'
+          icon={icons[mode] || icons.freescale}
+          type='checkbox'
+          value={this.props.showCursorTransformModes}
+          onChange={this.props.toggleCursorTransformModes}/>
+        <PopupMenu
+          mobile={this.props.isMobile}
+          isOpen={this.props.showCursorTransformModes && !this.props.previewPlaying}
+          toggle={this.props.toggleCursorTransformModes}
+          target="cursor-transform-modes-popover-button"
+          className={"more-canvas-actions-popover"}>
+          <div className="cursor-transform-modes-widget">
+            <div className='actions-container'>
+              <ToolSettingsInput renderSize={this.props.renderSize}
+                name='Freescale' icon='cursortransformmodefreescale' type='checkbox'
+                value={mode === 'freescale'}
+                onChange={() => this.props.setToolSetting('cursorTransformMode', 'freescale')}/>
+              <ToolSettingsInput renderSize={this.props.renderSize}
+                name='Uniform' icon='cursortransformmodeuniform' type='checkbox'
+                value={mode === 'uniform'}
+                onChange={() => this.props.setToolSetting('cursorTransformMode', 'uniform')}/>
+              <ToolSettingsInput renderSize={this.props.renderSize}
+                name='Skew' icon='cursortransformmodeskew' type='checkbox'
+                value={mode === 'skew'}
+                onChange={() => this.props.setToolSetting('cursorTransformMode', 'skew')}/>
+              <ToolSettingsInput renderSize={this.props.renderSize}
+                name='Skew and Scale' icon='cursortransformmodeskewscale' type='checkbox'
+                value={mode === 'skewscale'}
+                onChange={() => this.props.setToolSetting('cursorTransformMode', 'skewscale')}/>
+            </div>
+          </div>
+        </PopupMenu>
+      </div>
     );
   }
 

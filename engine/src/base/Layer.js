@@ -225,27 +225,49 @@ Wick.Layer = class extends Wick.Base {
         var originalEnd = existingFrame.end;
         var splitPosition = playheadPosition - existingFrame.start + 1;
 
-        // Capture the exact visual state at the new keyframe before splitting.
+        // Classic tweens interpolate Wick.Clip transformations.
+        // Wrap raw artwork before making the keyframe so scaleX/scaleY,
+        // rotation and position are stored as tweenable values.
+        var ensureTweenClip = function(frame) {
+            var clips = frame.clips;
+            var paths = frame.paths;
+
+            if ((clips.length === 0 && paths.length === 1) ||
+                (clips.length + paths.length) > 1) {
+                var allDrawables = paths.concat(clips);
+                var center = frame.project.selection.view._getObjectsBounds(allDrawables).center;
+
+                var clip = new Wick.Clip({
+                    transformation: new Wick.Transformation({
+                        x: center.x,
+                        y: center.y,
+                    }),
+                });
+
+                frame.addClip(clip);
+                clip.addObjects(allDrawables);
+            }
+
+            return frame.clips[0] || null;
+        };
+
+        ensureTweenClip(existingFrame);
+
         var splitTween = existingFrame.getActiveTween();
         var splitTransformation = splitTween
             ? splitTween.transformation.copy()
             : null;
 
-        // Copy the complete frame so the new keyframe has independent content.
         var newFrame = existingFrame.copy();
 
-        // Shorten the original frame to the left side of the new keyframe.
         existingFrame.end = playheadPosition - 1;
 
-        // Remove copied tween markers that are now outside the shortened frame.
         existingFrame.tweens.slice().forEach(tween => {
             if (tween.playheadPosition >= splitPosition) {
                 tween.remove();
             }
         });
 
-        // Preserve the tween's exact state at the split as the endpoint
-        // of the left-hand tween segment.
         if (splitTransformation) {
             existingFrame.addTween(new Wick.Tween({
                 playheadPosition: existingFrame.length,
@@ -253,13 +275,9 @@ Wick.Layer = class extends Wick.Base {
             }));
         }
 
-        // The copied frame becomes the new keyframe and keeps the remainder
-        // of the original frame's duration.
         newFrame.start = playheadPosition;
         newFrame.end = originalEnd;
 
-        // Remove tween markers that belong before the new keyframe.
-        // Shift the remaining markers into the new frame's local timeline.
         newFrame.tweens.slice().forEach(tween => {
             if (tween.playheadPosition < splitPosition) {
                 tween.remove();
@@ -269,10 +287,9 @@ Wick.Layer = class extends Wick.Base {
             }
         });
 
-        // Give the new keyframe its own tween state so editing this keyframe
-        // changes the tween from this point forward.
         if (splitTransformation) {
             var existingStartTween = newFrame.getTweenAtPosition(1);
+
             if (existingStartTween) {
                 existingStartTween.remove();
             }
@@ -396,7 +413,7 @@ Wick.Layer = class extends Wick.Base {
                         start: gap.start,
                         end: gap.end,
                     });
-                    this.addFrame(empty);
+                    this.addChild(empty);
                 } else {
                     // Otherwise, extend the frame to the left to fill the gap
                     frameOnLeft.end = gap.end;
@@ -409,7 +426,7 @@ Wick.Layer = class extends Wick.Base {
                     start: gap.start,
                     end: gap.end,
                 });
-                this.addFrame(empty);
+                this.addChild(empty);
             }
         });
     }
@@ -419,24 +436,44 @@ Wick.Layer = class extends Wick.Base {
      * @returns {Object[]} An array of objects with start/end positions describing gaps.
      */
     findGaps () {
+        // Scan frame intervals instead of searching the frame list once per position.
+        var frames = this.frames;
+        if (frames.length === 0) return [];
+
+        var maxEnd = 0;
+        frames.forEach(frame => {
+            if (frame.end > maxEnd) maxEnd = frame.end;
+        });
+        var timelineEnd = Math.floor(maxEnd);
+        if (timelineEnd < 1) return [];
+
+        // Only integer playhead positions are queried by the timeline.
+        var ranges = frames.map(frame => ({
+            start: Math.ceil(frame.start),
+            end: Math.floor(frame.end),
+        })).filter(range => {
+            return range.start <= range.end &&
+                range.end >= 1 && range.start <= timelineEnd;
+        });
+
+        ranges.sort((a, b) => a.start - b.start);
+
         var gaps = [];
+        var nextPosition = 1;
 
-        var currentGap = null;
-        for(var i = 1; i <= this.length; i++) {
-            var frame = this.getFrameAtPlayheadPosition(i);
+        for (var i = 0; i < ranges.length; i++) {
+            var range = ranges[i];
+            var start = Math.max(1, range.start);
+            var end = Math.min(timelineEnd, range.end);
 
-            // Found the start of a gap
-            if(!frame && !currentGap) {
-                currentGap = {};
-                currentGap.start = i;
+            if (end < nextPosition) continue;
+
+            if (start > nextPosition) {
+                gaps.push({ start: nextPosition, end: start - 1 });
             }
 
-            // Found the end of a gap
-            if(frame && currentGap) {
-                currentGap.end = i-1;
-                gaps.push(currentGap);
-                currentGap = null;
-            }
+            nextPosition = Math.max(nextPosition, end + 1);
+            if (nextPosition > timelineEnd) break;
         }
 
         return gaps;

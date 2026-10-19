@@ -153,7 +153,11 @@ Wick.View.Clip = class extends Wick.View {
     render () {
         // Prevent an unselectable object from being rendered
         // due to a clip having no content on the first frame.
-        this.model.ensureActiveFrameIsContentful();
+        // A focused clip can legitimately have empty cells at its current playhead.
+        // Only ensure a selectable frame when this clip is being displayed from outside.
+        if (!this.model.isFocus) {
+            this.model.ensureActiveFrameIsContentful();
+        }
 
         // Render timeline view
         this.model.timeline.view.render();
@@ -172,12 +176,18 @@ Wick.View.Clip = class extends Wick.View {
 
         //this._radius = null;
 
-        this.group.pivot = new this.paper.Point(0,0);
+        const pivot = this.model.pivot || [0, 0];
+        this.group.pivot = new this.paper.Point(pivot[0], pivot[1]);
         this.group.position.x = this.model.transformation.x;
         this.group.position.y = this.model.transformation.y;
         this.group.scaling.x = this.model.transformation.scaleX;
         this.group.scaling.y = this.model.transformation.scaleY;
         this.group.rotation = this.model.transformation.rotation;
+        const skewX = this.model.transformation.skewX || 0;
+        const skewY = this.model.transformation.skewY || 0;
+        this.group.data.wickSkewX = skewX;
+        this.group.data.wickSkewY = skewY;
+        this.group.skew(skewX, skewY);
         this.group.opacity = this.model.transformation.opacity;
     }
 
@@ -206,13 +216,13 @@ Wick.View.Clip = class extends Wick.View {
         });
         group.addChild(border);
 
-        group.pivot = new this.paper.Point(0,0);
+        const pivot = this.model.pivot || [0, 0];
+        group.pivot = new this.paper.Point(pivot[0], pivot[1]);
         group.position.x = this.model.transformation.x;
         group.position.y = this.model.transformation.y;
         group.scaling.x = this.model.transformation.scaleX;
         group.scaling.y = this.model.transformation.scaleY;
         group.rotation = this.model.transformation.rotation;
-
-        return group;
+        group.skew(this.model.transformation.skewX || 0, this.model.transformation.skewY || 0);return group;
     }
 }

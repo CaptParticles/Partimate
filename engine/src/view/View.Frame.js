@@ -118,6 +118,9 @@ Wick.View.Frame = class extends Wick.View {
                 wickPath.fontWeight = originalWickPath ? originalWickPath.fontWeight : 400;
                 wickPath.fontStyle = originalWickPath ? originalWickPath.fontStyle : 'normal';
                 wickPath.identifier = originalWickPath ? originalWickPath.identifier : null;
+                wickPath.pivot = child.pivot
+                    ? [child.pivot.x, child.pivot.y]
+                    : (originalWickPath && originalWickPath.pivot ? originalWickPath.pivot : null);
                 child.name = wickPath.uuid;
             }
         }); // Update clip transforms
@@ -135,9 +138,11 @@ Wick.View.Frame = class extends Wick.View {
                     scaleX: child.scaling.x,
                     scaleY: child.scaling.y,
                     rotation: child.rotation,
+                    skewX: child.data.wickSkewX === undefined ? 0 : child.data.wickSkewX,
+                    skewY: child.data.wickSkewY === undefined ? 0 : child.data.wickSkewY,
                     opacity: child.opacity
-
                 });
+                wickClip.pivot = [child.pivot.x, child.pivot.y];
             }
         });
 

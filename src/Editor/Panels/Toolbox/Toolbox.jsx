@@ -198,11 +198,13 @@ class Toolbox extends Component {
           setToolSetting={this.props.setToolSetting}
           getToolSettingRestrictions={this.props.getToolSettingRestrictions}
           toggleBrushModes={this.props.toggleBrushModes}
+          toggleCursorTransformModes={this.props.toggleCursorTransformModes}
           showCanvasActions={this.props.showCanvasActions}
           showBooleanCanvasActions={this.showBooleanCanvasActions}
           showLayersCanvasActions={this.showLayersCanvasActions}
           showAlignmentCanvasActions={this.showAlignmentCanvasActions}
           showBrushModes={this.props.showBrushModes}
+          showCursorTransformModes={this.props.showCursorTransformModes}
         />
 
         {this.renderCanvasActions()}
@@ -227,11 +229,13 @@ class Toolbox extends Component {
             setToolSetting={this.props.setToolSetting}
             getToolSettingRestrictions={this.props.getToolSettingRestrictions}
             toggleBrushModes={this.props.toggleBrushModes}
+            toggleCursorTransformModes={this.props.toggleCursorTransformModes}
             showCanvasActions={this.props.showCanvasActions}
             showBooleanCanvasActions={this.showBooleanCanvasActions}
             showLayersCanvasActions={this.showLayersCanvasActions}
             showAlignmentCanvasActions={this.showAlignmentCanvasActions}
-            showBrushModes={this.props.showBrushModes}/>
+            showBrushModes={this.props.showBrushModes}
+            showCursorTransformModes={this.props.showCursorTransformModes}/>
             {this.renderCanvasActions()}
         </div>
 
@@ -257,11 +261,13 @@ class Toolbox extends Component {
             setToolSetting={this.props.setToolSetting}
             getToolSettingRestrictions={this.props.getToolSettingRestrictions}
             toggleBrushModes={this.props.toggleBrushModes}
+            toggleCursorTransformModes={this.props.toggleCursorTransformModes}
             showCanvasActions={this.props.showCanvasActions}
             showBooleanCanvasActions={this.showBooleanCanvasActions}
             showLayersCanvasActions={this.showLayersCanvasActions}
             showAlignmentCanvasActions={this.showAlignmentCanvasActions}
-            showBrushModes={this.props.showBrushModes}/>
+            showBrushModes={this.props.showBrushModes}
+            showCursorTransformModes={this.props.showCursorTransformModes}/>
         </div>
 
       </div>

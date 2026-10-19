@@ -82,7 +82,7 @@ class WelcomeModal extends Component {
                     <img className="welcome-modal-mobile-image" alt="Night sky with mountains, clouds, a moon and stars" src={nightImageShort} />
                 </div>
                 <div className="welcome-modal-mobile-content">
-                    <div className="welcome-modal-title small-modal">Candlestick</div>
+                    <div className="welcome-modal-title small-modal">Partimate</div>
                     <div className="welcome-modal-version small-modal"><a className="welcome-modal-highlight" target="_blank" rel="noopener noreferrer" href={this.forumPost}>Version {this.props.editorVersion}</a></div>
                     {this.renderUpdates("small-modal")}
                     {/* {this.renderPatreonSupporters()} */}
@@ -110,14 +110,14 @@ class WelcomeModal extends Component {
                         <img id="welcome-image" alt="Night sky with mountains, clouds, a moon and stars" src={coolField} />
                     </div>
                     <div id="welcome-message-container" className="modal-main-container">
-                        <div id="welcome-modal-title" className="welcome-modal-item">Welcome To Candlestick!</div>
+                        <div id="welcome-modal-title" className="welcome-modal-item">Welcome To Partimate!</div>
                         <div id="welcome-modal-version" className="welcome-modal-item"><a className="welcome-modal-highlight" target="_blank" rel="noopener noreferrer" href={this.forumPost}>Version {this.props.editorVersion}</a></div>
                         <div id="welcome-modal-subtitle" className="welcome-modal-item">Candlestick {this.props.editorVersion} includes:</div>
                         <div id="welcome-modal-message" className="welcome-modal-item">
                             {this.renderUpdates()}
                             {/* {this.renderPatreonSupporters("desktop-modal")} */}
                         </div>
-                        <div id="welcome-modal-forum-link" className="welcome-modal-item">Please report all bugs on our <a className="welcome-modal-highlight" target="_blank" rel="noopener noreferrer" href="https://url.candlestickers.app/discord">Discord!</a></div>
+                        <div id="welcome-modal-forum-link" className="welcome-modal-item">Check out our <a className="welcome-modal-highlight" target="_blank" rel="noopener noreferrer" href="https://youtube.com/@battleforavip?si=MBd2BtzpjxEK9Lfc">YouTube Channel!</a></div>
                         <div id="welcome-modal-footer">
                             <div id="welcome-modal-accept">
                                 <ActionButton

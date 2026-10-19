@@ -190,6 +190,11 @@ Wick.GUIElement.FramesContainer = class extends Wick.GUIElement {
     }
 
     onMouseUp (e) {
+        // A ruler-originated scrub is not a frame-grid click, even if hover targeting changes.
+        if (this.project._playheadScrubbing || this.project._lastClickedElem instanceof Wick.GUIElement.NumberLine) {
+            this._selectionBox = null;
+            return;
+        }
         if(this._selectionBox) {
             if(!e.shiftKey) {
                 this.model.project.selection.clear();

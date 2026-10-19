@@ -985,18 +985,23 @@ Wick.Selection = class extends Wick.Base {
                 y: selectedObject.transformation.y,
             }
         } else {
-            // Path selected or multiple objects selected: Reset rotation and use center for pivot point
+            // Paths and multiple selections use an unrotated transform widget.
             this._widgetRotation = 0;
+            var selectedBounds = this.view._getSelectedObjectsBounds();
 
-            var boundsCenter = this.view._getSelectedObjectsBounds().center;
-            this._pivotPoint = {
-                x: boundsCenter.x,
-                y: boundsCenter.y,
-            };
+            if (this.numObjects === 1 && selectedObject instanceof Wick.Path &&
+                Array.isArray(selectedObject.pivot) && selectedObject.view && selectedObject.view.item) {
+                var localPivot = new paper.Point(selectedObject.pivot[0], selectedObject.pivot[1]);
+                var globalPivot = selectedObject.view.item.localToGlobal(localPivot);
+                this._pivotPoint = { x: globalPivot.x, y: globalPivot.y };
+            } else {
+                var boundsCenter = selectedBounds.center;
+                this._pivotPoint = { x: boundsCenter.x, y: boundsCenter.y };
+            }
 
             // Always pull original size values.
-            this._originalWidth = this.view._getSelectedObjectsBounds().width;
-            this._originalHeight = this.view._getSelectedObjectsBounds().height;
+            this._originalWidth = selectedBounds.width;
+            this._originalHeight = selectedBounds.height;
         }
     }
 

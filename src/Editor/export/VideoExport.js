@@ -9,6 +9,10 @@ var EXPORT_VIDEO_START = 70
 
 const isAndroid = () => /Android/i.test(navigator.userAgent)
 
+export const getFFmpegBaseURL = (publicURL, documentURL) =>
+  new URL(`${(publicURL || '.').replace(/\/+$/, '')}/corelibs/ffmpeg/`, documentURL).href
+
+
 // On Android, system ffmpeg is not available so we skip the native path and use
 // the web ffmpeg (WASM) path instead, which runs fine inside the Tauri WebView.
 const isTauri = () =>
@@ -18,15 +22,14 @@ const isTauri = () =>
 class VideoExport {
 
   static renderVideo = async (args) => {
-    let images = await VideoExport._generateProjectImages(args)
-    let soundInfo = [...args.project.soundsPlayed]
-    args.soundInfo = soundInfo
-    let audio = await VideoExport._generateAudioFile(args)
-
     if (isTauri()) {
+      const images = await VideoExport._generateProjectImages(args)
+      args.soundInfo = [...args.project.soundsPlayed]
+      const audio = await VideoExport._generateAudioFile(args)
       await VideoExport._exportNativeMP4({ images, audio, args })
     } else {
-      await VideoExport._generateVideo({ images: images, audio: audio, args })
+      // Render directly into the encoder instead of retaining all frames here.
+      await VideoExport._generateVideo({ args })
     }
   }
 
@@ -46,36 +49,25 @@ class VideoExport {
 
     onProgress && onProgress('Rendering Images', EXPORT_IMAGE_START)
 
-    return new Promise(resolve => {
-      let imageData = []
+    return new Promise((resolve, reject) => {
+      const imageData = []
       let frameNumber = 0
-
       project.generateImageSequence({
         imageType: 'image/jpeg',
         width: dimensions.width,
         height: dimensions.height,
-
         onProgress: (currentFrame, numTotalFrames) => {
-          let progress = EXPORT_IMAGE_START + (currentFrame / numTotalFrames) * 20
-          onProgress('Rendering Frame ' + currentFrame + '/' + numTotalFrames, progress)
+          const progress = EXPORT_IMAGE_START + (currentFrame / numTotalFrames) * 20
+          onProgress && onProgress('Rendering Frame ' + currentFrame + '/' + numTotalFrames, progress)
         },
-
-        onFinish: (images) => {
-          onProgress('Converting Frames', EXPORT_AUDIO_START)
-
-          images.forEach(image => {
-            let paddedNum = (frameNumber + '').padStart(12, '0')
-            let name = 'frame' + paddedNum + '.jpg'
-
-            let cleanBase64 = image.src.split(',')[1]
-            let buffer = b64toBuff.decode(cleanBase64)
-
-            imageData.push({ name: name, data: new Uint8Array(buffer) })
-            frameNumber += 1
-          })
-
-          resolve(imageData)
+        onFrame: async blob => {
+          const name = 'frame' + String(frameNumber++).padStart(12, '0') + '.jpg'
+          const frame = { name, data: new Uint8Array(await blob.arrayBuffer()) }
+          if (args.onFrame) await args.onFrame(frame)
+          else imageData.push(frame)
         },
+        onError: reject,
+        onFinish: () => resolve(imageData),
       })
     })
   }
@@ -118,8 +110,8 @@ class VideoExport {
   static _generateVideo = async ({ images, audio, args }) => {
     let { project, onProgress, onFinish } = args
 
-    // Respects PUBLIC_URL so the /test deploy loads from /test/corelibs/ffmpeg/
-    const baseURL = window.location.origin + (process.env.PUBLIC_URL || '').replace(/\/?$/, '')
+    // Resolve relative PUBLIC_URL values (including CRA's ".") as paths, not hostnames.
+    const baseURL = getFFmpegBaseURL(process.env.PUBLIC_URL, document.baseURI)
 
     // Load the UMD bundle via script tag instead of letting webpack bundle the ESM version.
     // The ESM build creates a { type: 'module' } worker which disables importScripts(),
@@ -128,7 +120,7 @@ class VideoExport {
     if (!window.FFmpegWASM) {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script')
-        script.src = baseURL + '/corelibs/ffmpeg/ffmpeg.umd.js'
+        script.src = baseURL + 'ffmpeg.umd.js'
         script.onload = resolve
         script.onerror = () => reject(new Error('Failed to load ffmpeg.umd.js'))
         document.head.appendChild(script)
@@ -137,74 +129,84 @@ class VideoExport {
     const { FFmpeg } = window.FFmpegWASM
     const ffmpeg = new FFmpeg()
 
-    if(ENABLE_LOGGING) ffmpeg.on('log', ({ message }) => console.log('[ffmpeg]', message))
+    try {
+      if(ENABLE_LOGGING) ffmpeg.on('log', ({ message }) => console.log('[ffmpeg]', message))
 
-    ffmpeg.on('progress', ({ progress }) => {
-      let pct = EXPORT_VIDEO_START + Math.round(progress * 25)
-      onProgress && onProgress('Encoding: ' + Math.round(progress * 100) + '%', Math.min(pct, 95))
-    })
-
-    onProgress && onProgress('Loading video encoder...', EXPORT_VIDEO_START)
-
-    await ffmpeg.load({
-      coreURL: baseURL + '/corelibs/ffmpeg/ffmpeg-core.js',
-      wasmURL: baseURL + '/corelibs/ffmpeg/ffmpeg-core.wasm',
-    })
-
-    onProgress && onProgress('Writing frames...', EXPORT_VIDEO_START + 3)
-
-    for (const frame of images) // add frames to video
-      await ffmpeg.writeFile(frame.name, frame.data)
-    if(audio) // attach audio
-      await ffmpeg.writeFile('audio.wav', new Uint8Array(audio))
-
-    let inputs = ['-i', 'frame%12d.jpg']
-    if (audio) inputs = inputs.concat(['-i', 'audio.wav'])
-
-    let dimensions = VideoExport._ensureValidDimensions(
-      args.width || project.width,
-      args.height || project.height
-    )
-
-    let command = [
-      '-r', '' + project.framerate,
-      '-s', dimensions.width + 'x' + dimensions.height,
-      ...inputs,
-      '-pix_fmt', 'yuv420p',
-      '-q:v', '10',
-      '-strict', '-2',
-      'out.mp4',
-    ]
-
-    onProgress && onProgress('Encoding video...', EXPORT_VIDEO_START + 5)
-    const exitCode = await ffmpeg.exec(command)
-    if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — video encoding failed`)
-
-    const data = await ffmpeg.readFile('out.mp4')
-    if (!data || data.byteLength === 0) throw new Error('ffmpeg produced an empty output file')
-    let blob = new Blob([data], { type: 'video/mp4' })
-
-    if (isAndroid() && window.__TAURI__) {
-      // On Android, save via the native SavePlugin so the video lands in the
-      // device gallery (MediaStore.Video) rather than the invisible Downloads folder.
-      const invoke = (window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) || window.__TAURI__.invoke
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result.split(',')[1])
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
+      ffmpeg.on('progress', ({ progress }) => {
+        let pct = EXPORT_VIDEO_START + Math.round(progress * 25)
+        onProgress && onProgress('Encoding: ' + Math.round(progress * 100) + '%', Math.min(pct, 95))
       })
-      await invoke('plugin:save|saveToDownloads', {
-        filename: project.name + '.mp4',
-        mimeType: 'video/mp4',
-        data: base64,
+
+      onProgress && onProgress('Loading video encoder...', images ? EXPORT_VIDEO_START : 0)
+
+      await ffmpeg.load({
+        coreURL: baseURL + 'ffmpeg-core.js',
+        wasmURL: baseURL + 'ffmpeg-core.wasm',
       })
-    } else {
-      window.saveFileFromWick(blob, project.name, '.mp4')
+
+      if (images) {
+        for (const frame of images) await ffmpeg.writeFile(frame.name, frame.data)
+      } else {
+        await VideoExport._generateProjectImages({
+          ...args,
+          onFrame: frame => ffmpeg.writeFile(frame.name, frame.data),
+        })
+        args.soundInfo = [...project.soundsPlayed]
+        audio = await VideoExport._generateAudioFile(args)
+      }
+      if (audio) await ffmpeg.writeFile('audio.wav', audio)
+
+      let inputs = ['-i', 'frame%12d.jpg']
+      if (audio) inputs = inputs.concat(['-i', 'audio.wav'])
+
+      let dimensions = VideoExport._ensureValidDimensions(
+        args.width || project.width,
+        args.height || project.height
+      )
+
+      let command = [
+        '-r', '' + project.framerate,
+        '-s', dimensions.width + 'x' + dimensions.height,
+        ...inputs,
+        '-pix_fmt', 'yuv420p',
+        '-q:v', '10',
+        '-strict', '-2',
+        'out.mp4',
+      ]
+
+      onProgress && onProgress('Encoding video...', EXPORT_VIDEO_START + 5)
+      const exitCode = await ffmpeg.exec(command)
+      if (exitCode !== 0) throw new Error(`ffmpeg exited with code ${exitCode} — video encoding failed`)
+
+      const data = await ffmpeg.readFile('out.mp4')
+      if (!data || data.byteLength === 0) throw new Error('ffmpeg produced an empty output file')
+      let blob = new Blob([data], { type: 'video/mp4' })
+
+      if (isAndroid() && window.__TAURI__) {
+        // On Android, save via the native SavePlugin so the video lands in the
+        // device gallery (MediaStore.Video) rather than the invisible Downloads folder.
+        const invoke = (window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) || window.__TAURI__.invoke
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result.split(',')[1])
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
+        await invoke('plugin:save|saveToDownloads', {
+          filename: project.name + '.mp4',
+          mimeType: 'video/mp4',
+          data: base64,
+        })
+      } else {
+        window.saveFileFromWick(blob, project.name, '.mp4')
+      }
+
+      onProgress && onProgress('Rendering Complete! Downloading...', 100)
+      onFinish && onFinish()
+    } finally {
+      // Release the worker and its in-memory files after success or failure.
+      ffmpeg.terminate()
     }
-
-    onProgress && onProgress('Rendering Complete! Downloading...', 100)
-    onFinish && onFinish()
   }
 
   static _ensureValidDimensions(width, height) {

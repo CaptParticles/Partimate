@@ -36,6 +36,9 @@ Wick.Transformation = class {
         this.scaleX = args.scaleX === undefined ? 1 : args.scaleX;
         this.scaleY = args.scaleY === undefined ? 1 : args.scaleY;
         this.rotation = args.rotation === undefined ? 0 : args.rotation;
+        // Skew angles are stored in degrees, matching Paper.js' skew API.
+        this.skewX = args.skewX === undefined ? 0 : args.skewX;
+        this.skewY = args.skewY === undefined ? 0 : args.skewY;
         this.opacity = args.opacity === undefined ? 1 : args.opacity;
     }
 
@@ -49,6 +52,8 @@ Wick.Transformation = class {
             scaleX: this.scaleX,
             scaleY: this.scaleY,
             rotation: this.rotation,
+            skewX: this.skewX,
+            skewY: this.skewY,
             opacity: this.opacity,
         }
     }
