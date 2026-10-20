@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.17.11.18.14";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.20.18.5.42";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -49670,7 +49670,13 @@ Wick.Layer = class extends Wick.Base {
       }
       return frame.clips[0] || null;
     };
-    ensureTweenClip(existingFrame);
+
+    // Ordinary keyframes should preserve drawings as drawings.
+    // Wrap artwork only when splitting an existing Classic Tween, whose
+    // transform interpolation requires a Wick.Clip target.
+    if (existingFrame.tweens && existingFrame.tweens.length > 0) {
+      ensureTweenClip(existingFrame);
+    }
     var splitTween = existingFrame.getActiveTween();
     var splitTransformation = splitTween ? splitTween.transformation.copy() : null;
     var newFrame = existingFrame.copy();
@@ -49812,7 +49818,7 @@ Wick.Layer = class extends Wick.Base {
             start: gap.start,
             end: gap.end
           });
-          this.addFrame(empty);
+          this.addChild(empty);
         } else {
           // Otherwise, extend the frame to the left to fill the gap
           frameOnLeft.end = gap.end;
@@ -49825,7 +49831,7 @@ Wick.Layer = class extends Wick.Base {
           start: gap.start,
           end: gap.end
         });
-        this.addFrame(empty);
+        this.addChild(empty);
       }
     });
   }
@@ -49835,23 +49841,39 @@ Wick.Layer = class extends Wick.Base {
    * @returns {Object[]} An array of objects with start/end positions describing gaps.
    */
   findGaps() {
+    // Scan frame intervals instead of searching the frame list once per position.
+    var frames = this.frames;
+    if (frames.length === 0) return [];
+    var maxEnd = 0;
+    frames.forEach(frame => {
+      if (frame.end > maxEnd) maxEnd = frame.end;
+    });
+    var timelineEnd = Math.floor(maxEnd);
+    if (timelineEnd < 1) return [];
+
+    // Only integer playhead positions are queried by the timeline.
+    var ranges = frames.map(frame => ({
+      start: Math.ceil(frame.start),
+      end: Math.floor(frame.end)
+    })).filter(range => {
+      return range.start <= range.end && range.end >= 1 && range.start <= timelineEnd;
+    });
+    ranges.sort((a, b) => a.start - b.start);
     var gaps = [];
-    var currentGap = null;
-    for (var i = 1; i <= this.length; i++) {
-      var frame = this.getFrameAtPlayheadPosition(i);
-
-      // Found the start of a gap
-      if (!frame && !currentGap) {
-        currentGap = {};
-        currentGap.start = i;
+    var nextPosition = 1;
+    for (var i = 0; i < ranges.length; i++) {
+      var range = ranges[i];
+      var start = Math.max(1, range.start);
+      var end = Math.min(timelineEnd, range.end);
+      if (end < nextPosition) continue;
+      if (start > nextPosition) {
+        gaps.push({
+          start: nextPosition,
+          end: start - 1
+        });
       }
-
-      // Found the end of a gap
-      if (frame && currentGap) {
-        currentGap.end = i - 1;
-        gaps.push(currentGap);
-        currentGap = null;
-      }
+      nextPosition = Math.max(nextPosition, end + 1);
+      if (nextPosition > timelineEnd) break;
     }
     return gaps;
   }
@@ -51407,14 +51429,14 @@ Wick.Project = class extends Wick.Base {
     if (!args.onError) args.onError = () => {};
     if (!args.onBeforeTick) args.onBeforeTick = () => {};
     if (!args.onAfterTick) args.onAfterTick = () => {};
+    if (this._tickIntervalID) {
+      this.stop();
+    }
     window._scriptOnErrorCallback = args.onError;
     this._playing = true;
     this.view.paper.view.autoUpdate = false;
     this.stopAudioScrubSounds();
     this.orderDynamicFrames();
-    if (this._tickIntervalID) {
-      this.stop();
-    }
     this.error = null;
     this.history.saveSnapshot('state-before-play');
     this.selection.clear();
@@ -67650,6 +67672,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     this._onProjectSoftModified = () => {};
     this._attachedDocumentEvents = [];
     this._attachedCanvasEvents = [];
+    this._mouseWheelHandler = this._onMouseWheel.bind(this);
   }
 
   /**
@@ -67659,7 +67682,8 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     document.addEventListener(event, callback, c);
     this._attachedDocumentEvents.push({
       event,
-      fn: callback
+      fn: callback,
+      options: c
     });
   }
 
@@ -67670,7 +67694,8 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     this._canvas.addEventListener(event, callback, c);
     this._attachedCanvasEvents.push({
       event,
-      fn: callback
+      fn: callback,
+      options: c
     });
   }
 
@@ -67679,11 +67704,25 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
    */
   removeAllEventListeners() {
     this._attachedDocumentEvents.forEach(evt => {
-      document.removeEventListener(evt.event, evt.fn);
+      document.removeEventListener(evt.event, evt.fn, evt.options);
     });
     this._attachedCanvasEvents.forEach(evt => {
-      this._canvas.removeEventListener(evt.event, evt.fn);
+      this._canvas.removeEventListener(evt.event, evt.fn, evt.options);
     });
+    this._attachedDocumentEvents = [];
+    this._attachedCanvasEvents = [];
+
+    // jQuery listeners are not removed by DOM removeEventListener.
+    if (this._mouseWheelHandler && typeof $ !== 'undefined') {
+      $(this._canvas).off('mousewheel', this._mouseWheelHandler);
+    }
+
+    // A GUI can be disposed while an edge-drag autoscroll is active.
+    clearInterval(this.autoscrollInterval);
+    this.autoscrollInterval = null;
+    this.canvasClicked = false;
+    this._isDragging = false;
+    this._mouseEventsAttached = false;
   }
 
   /**
@@ -67724,7 +67763,7 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
       }, false);
 
       // Scroll events
-      $(this._canvas).on('mousewheel', this._onMouseWheel.bind(this));
+      $(this._canvas).on('mousewheel', this._mouseWheelHandler);
 
       // Touch events
       this.createCanvasEvent('touchstart', e => {
