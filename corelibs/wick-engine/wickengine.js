@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.20.18.5.42";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.21.16.57.48";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -49638,30 +49638,11 @@ Wick.Layer = class extends Wick.Base {
     // Classic tweens interpolate Wick.Clip transformations.
     // Wrap raw artwork before making the keyframe so scaleX/scaleY,
     // rotation and position are stored as tweenable values.
-    var ensureTweenClip = function (frame) {
-      var clips = frame.clips;
-      var paths = frame.paths;
-      if (clips.length === 0 && paths.length === 1 || clips.length + paths.length > 1) {
-        var allDrawables = paths.concat(clips);
-        var center = frame.project.selection.view._getObjectsBounds(allDrawables).center;
-        var clip = new Wick.Clip({
-          transformation: new Wick.Transformation({
-            x: center.x,
-            y: center.y
-          })
-        });
-        frame.addClip(clip);
-        clip.addObjects(allDrawables);
-      }
-      return frame.clips[0] || null;
-    };
 
     // Ordinary keyframes should preserve drawings as drawings.
     // Wrap artwork only when splitting an existing Classic Tween, whose
     // transform interpolation requires a Wick.Clip target.
-    if (existingFrame.tweens && existingFrame.tweens.length > 0) {
-      ensureTweenClip(existingFrame);
-    }
+
     var splitTween = existingFrame.getActiveTween();
     var splitTransformation = splitTween ? splitTween.transformation.copy() : null;
     var newFrame = existingFrame.copy();
