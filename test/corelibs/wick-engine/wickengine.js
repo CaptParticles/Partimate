@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.25.12.28.14";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.25.12.59.19";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -56757,7 +56757,10 @@ Wick.Frame = class extends Wick.Tickable {
       var pose = sampleTween(relativePosition);
       if (pose) {
         keyframe.clips.forEach(function (clip) {
-          clip.transformation = pose.transformation.copy();
+          // Set the stored transform directly. The public setter also
+          // rewrites the tween at the current playhead, but this
+          // keyframe is detached and its tweens have been removed.
+          clip._transformation = pose.transformation.copy();
         });
       }
 
