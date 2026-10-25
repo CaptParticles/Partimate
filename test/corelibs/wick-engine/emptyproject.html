@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.21.16.57.48";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.25.10.34.9";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -56656,6 +56656,102 @@ Wick.Frame = class extends Wick.Tickable {
     }
   }
   /**
+   * Convert this frame's tween span into editable keyframes.
+   * Each frame receives its own deep copy of the artwork and the tweened
+   * transformation is baked onto its clips. Holds before/after the tween
+   * remain holds, and frame scripts/sound/identifier stay on the first frame.
+   * @returns {Wick.Frame[]} Frames created by the conversion.
+   */
+  convertTweenToKeyframes() {
+    if (!this.parentLayer) return [];
+    var sourceFrame = this;
+    var layer = this.parentLayer;
+    var originalStart = this.start;
+    var originalEnd = this.end;
+    var sourceTweens = this.tweens.slice().sort(function (a, b) {
+      return a.playheadPosition - b.playheadPosition;
+    });
+    if (sourceTweens.length === 0 || originalEnd < originalStart) return [];
+    var firstTween = sourceTweens[0];
+    var lastTween = sourceTweens[sourceTweens.length - 1];
+    var tweenStart = originalStart + firstTween.playheadPosition - 1;
+    var tweenEnd = originalStart + lastTween.playheadPosition - 1;
+
+    // Compute a pose from the original tween anchors before creating copies.
+    // Do not rely on the live playhead; this must work for any selected span.
+    var sampleTween = function (relativePosition) {
+      var exact = sourceTweens.find(function (tween) {
+        return tween.playheadPosition === relativePosition;
+      });
+      if (exact) return exact;
+      var before = null;
+      var after = null;
+      sourceTweens.forEach(function (tween) {
+        if (tween.playheadPosition < relativePosition) before = tween;
+        if (!after && tween.playheadPosition > relativePosition) after = tween;
+      });
+      if (before && after) {
+        return Wick.Tween.interpolate(before, after, relativePosition);
+      }
+      return after || before;
+    };
+    var createdFrames = [];
+    var preserveOriginalMetadata = true;
+    var createBakedFrame = function (start, end, relativePosition) {
+      var keyframe = sourceFrame.copy();
+      keyframe.start = start;
+      keyframe.end = end;
+
+      // The copied frames must not retain live tween anchors.
+      keyframe.removeAllTweens();
+
+      // A label, scripts and sound should not run/play once per duplicate.
+      if (!preserveOriginalMetadata) {
+        keyframe.identifier = null;
+        keyframe.removeSound();
+        keyframe.getChildren('Script').slice().forEach(function (script) {
+          keyframe.removeChild(script);
+        });
+      }
+      preserveOriginalMetadata = false;
+      var pose = sampleTween(relativePosition);
+      if (pose) {
+        keyframe.clips.forEach(function (clip) {
+          clip.transformation = pose.transformation.copy();
+        });
+      }
+      createdFrames.push(keyframe);
+      return keyframe;
+    };
+
+    // Preserve the original pre-tween hold, if there is one.
+    if (tweenStart > originalStart) {
+      createBakedFrame(originalStart, tweenStart - 1, firstTween.playheadPosition);
+    }
+
+    // Bake each frame between the first and last tween anchor, inclusive.
+    for (var timelinePosition = tweenStart; timelinePosition <= tweenEnd; timelinePosition++) {
+      var relativePosition = timelinePosition - originalStart + 1;
+      createBakedFrame(timelinePosition, timelinePosition, relativePosition);
+    }
+
+    // Preserve the post-tween hold, if there is one, at the ending pose.
+    if (tweenEnd < originalEnd) {
+      createBakedFrame(tweenEnd + 1, originalEnd, lastTween.playheadPosition);
+    }
+
+    // All generated ranges exactly cover the old frame; avoid addFrame(),
+    // overlap resolution, and gap filling because they can modify that span.
+    layer.removeChild(sourceFrame);
+    createdFrames.forEach(function (frame) {
+      layer.addChild(frame);
+    });
+    layer._children.sort(function (a, b) {
+      return a.start - b.start;
+    });
+    return createdFrames;
+  }
+  /**
    * Remove a tween from the frame.
    * @param {Wick.Tween} tween - the tween to remove.
    */
@@ -65929,6 +66025,45 @@ Wick.GUIElement.ActionButtonsContainer = class extends Wick.GUIElement {
         }
       }
     });
+    this.convertTweenToKeyframesButton = new Wick.GUIElement.ActionButton(this.model, {
+      tooltip: 'Convert to Keyframes',
+      icon: 'copy_frame_forward',
+      clickFn: () => {
+        var project = this.model.project;
+        var selectedObjects = project.selection.getSelectedObjects('Timeline');
+        var framesToConvert = [];
+        selectedObjects.forEach(function (object) {
+          if (object instanceof Wick.Frame) {
+            framesToConvert.push(object);
+          } else if (object instanceof Wick.Tween && object.parentFrame) {
+            framesToConvert.push(object.parentFrame);
+          }
+        });
+
+        // A frame and one of its tween diamonds may both be selected.
+        framesToConvert = framesToConvert.filter(function (frame, index, allFrames) {
+          return frame && frame.parentLayer && frame.tweens.length > 0 && allFrames.indexOf(frame) === index;
+        });
+        if (framesToConvert.length === 0) return;
+        var convertedFrames = [];
+        framesToConvert.forEach(function (frame) {
+          convertedFrames = convertedFrames.concat(frame.convertTweenToKeyframes());
+        });
+        if (convertedFrames.length === 0) return;
+        project.selection.clear();
+        var activeTimeline = project.activeTimeline;
+        var activeLayer = project.activeLayer;
+        var playhead = activeTimeline ? activeTimeline.playheadPosition : -1;
+        var selectedKeyframe = convertedFrames.find(function (frame) {
+          return activeTimeline && frame.parentLayer === activeLayer && frame.inPosition(playhead);
+        }) || convertedFrames[0];
+        if (selectedKeyframe && selectedKeyframe.parentLayer) {
+          selectedKeyframe.parentLayer.activate();
+          project.selection.select(selectedKeyframe);
+        }
+        this.projectWasModified();
+      }
+    });
     this.addTweenButton = new Wick.GUIElement.ActionButton(this.model, {
       tooltip: 'Add Tween',
       icon: 'add_tween',
@@ -66004,31 +66139,45 @@ Wick.GUIElement.ActionButtonsContainer = class extends Wick.GUIElement {
     }
     var tweenButtonIsActive = this.model.project.canCreateTween;
     var deleteButtonIsActive = this.model.project.selection.getSelectedObjects('Timeline').length > 0;
+    var selectedTimelineObjects = this.model.project.selection.getSelectedObjects('Timeline');
+    var convertTweenButtonIsActive = selectedTimelineObjects.some(function (object) {
+      if (object instanceof Wick.Frame) return object.tweens.length > 0;
+      if (object instanceof Wick.Tween) return !!(object.parentFrame && object.parentFrame.tweens.length > 0);
+      return false;
+    });
     ctx.save();
     ctx.save();
-    var widthOfActionButtonContainer = 90;
+    var widthOfActionButtonContainer = Wick.GUIElement.IS_MOBILE ? 105 : 120;
+    var actionButtonStart = Wick.GUIElement.IS_MOBILE ? 5 : 0;
+    var actionButtonSpacing = Wick.GUIElement.IS_MOBILE ? 25 : 30;
     var bump = 10;
     var leftOfContainer = Wick.GUIElement.LAYERS_CONTAINER_WIDTH + bump - widthOfActionButtonContainer;
     ctx.translate(leftOfContainer, 0);
     // Delete Frame button
     ctx.save();
     ctx.globalAlpha = deleteButtonIsActive ? 1.0 : 0.3;
-    ctx.translate(0, 20);
+    ctx.translate(actionButtonStart, 20);
     this.deleteFrameButton.draw(deleteButtonIsActive);
     ctx.restore();
 
     // Insert Blank Frame Button
     ctx.save();
     ctx.globalAlpha = 1.0;
-    ctx.translate(30, 20);
+    ctx.translate(actionButtonStart + actionButtonSpacing, 20);
     this.insertKeyframeButton.draw(true); // Insert frame is always active...
     ctx.restore();
 
     // Add Tween button
     ctx.save();
     ctx.globalAlpha = tweenButtonIsActive ? 1.0 : 0.3;
-    ctx.translate(60, 20);
+    ctx.translate(actionButtonStart + actionButtonSpacing * 2, 20);
     this.addTweenButton.draw(tweenButtonIsActive);
+    ctx.restore();
+    // Convert the selected classic-tween span into editable keyframes.
+    ctx.save();
+    ctx.globalAlpha = convertTweenButtonIsActive ? 1.0 : 0.3;
+    ctx.translate(actionButtonStart + actionButtonSpacing * 3, 20);
+    this.convertTweenToKeyframesButton.draw(convertTweenButtonIsActive);
     ctx.restore();
     ctx.restore();
     ctx.restore();
