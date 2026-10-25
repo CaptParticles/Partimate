@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.25.10.34.9";
+var WICK_ENGINE_BUILD_VERSION = "2026.10.25.12.28.14";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -50859,6 +50859,61 @@ Wick.Project = class extends Wick.Base {
   }
 
   /**
+   * True if the current timeline selection contains a classic tween that can
+   * be converted into keyframes. A tween diamond counts as its parent frame.
+   * @type {boolean}
+   */
+  get canConvertSelectedFramesToKeyframes() {
+    return this.selection.getSelectedObjects('Timeline').some(object => {
+      if (object instanceof Wick.Frame) {
+        return !!(object.parentLayer && object.tweens.length > 0);
+      }
+      if (object instanceof Wick.Tween) {
+        return !!(object.parentFrame && object.parentFrame.parentLayer && object.parentFrame.tweens.length > 0);
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Convert the classic tweens that own the selected timeline frames into
+   * independent keyframes. Selecting a tween selects its parent frame.
+   * @returns {Wick.Frame[]} The frames created by the conversion.
+   */
+  convertSelectedFramesToKeyframes() {
+    var framesToConvert = [];
+    this.selection.getSelectedObjects('Timeline').forEach(object => {
+      var frame = null;
+      if (object instanceof Wick.Frame) {
+        frame = object;
+      } else if (object instanceof Wick.Tween) {
+        frame = object.parentFrame;
+      }
+      if (frame && frame.parentLayer && frame.tweens.length > 0 && framesToConvert.indexOf(frame) === -1) {
+        framesToConvert.push(frame);
+      }
+    });
+    var convertedFrames = [];
+    framesToConvert.forEach(frame => {
+      convertedFrames = convertedFrames.concat(frame.convertTweenToKeyframes());
+    });
+    if (convertedFrames.length > 0) {
+      var activeTimeline = this.activeTimeline;
+      var activeLayer = this.activeLayer;
+      var playhead = activeTimeline ? activeTimeline.playheadPosition : -1;
+      var frameToSelect = convertedFrames.find(frame => {
+        return activeTimeline && frame.parentLayer === activeLayer && frame.inPosition(playhead);
+      }) || convertedFrames[0];
+      this.selection.clear();
+      if (frameToSelect && frameToSelect.parentLayer) {
+        frameToSelect.parentLayer.activate();
+        this.selection.select(frameToSelect);
+      }
+    }
+    return convertedFrames;
+  }
+
+  /**
    * Tries to create a tween if there is an empty space between tweens.
    */
   tryToAutoCreateTween() {
@@ -56640,12 +56695,21 @@ Wick.Frame = class extends Wick.Tickable {
       }
     }
   }
+
   /**
-   * Convert this frame's tween span into editable keyframes.
-   * Each frame receives its own deep copy of the artwork and the tweened
-   * transformation is baked onto its clips. Holds before/after the tween
-   * remain holds, and frame scripts/sound/identifier stay on the first frame.
-   * @returns {Wick.Frame[]} Frames created by the conversion.
+   * Convert this frame's classic tween into independent keyframes.
+   *
+   * Every playhead position covered by the tween becomes its own one-frame
+   * keyframe with a deep copy of the original artwork. The tweened transform
+   * is baked onto the clips of each copy, so the animation looks the same
+   * without needing the tween. Holds before the first tween anchor and after
+   * the last one are kept as holds.
+   *
+   * All tweens belonging to this frame are removed. Frames, layers, and tweens
+   * outside this frame are left untouched. Frame metadata (identifier, sound,
+   * scripts) is kept only on the first resulting frame so it does not repeat.
+   *
+   * @returns {Wick.Frame[]} The frames that replaced this frame.
    */
   convertTweenToKeyframes() {
     if (!this.parentLayer) return [];
@@ -56662,8 +56726,8 @@ Wick.Frame = class extends Wick.Tickable {
     var tweenStart = originalStart + firstTween.playheadPosition - 1;
     var tweenEnd = originalStart + lastTween.playheadPosition - 1;
 
-    // Compute a pose from the original tween anchors before creating copies.
-    // Do not rely on the live playhead; this must work for any selected span.
+    // Sample the same interpolation getActiveTween() uses at render time,
+    // but without depending on the live playhead position.
     var sampleTween = function (relativePosition) {
       var exact = sourceTweens.find(function (tween) {
         return tween.playheadPosition === relativePosition;
@@ -56681,30 +56745,33 @@ Wick.Frame = class extends Wick.Tickable {
       return after || before;
     };
     var createdFrames = [];
-    var preserveOriginalMetadata = true;
+    var isFirstFrame = true;
     var createBakedFrame = function (start, end, relativePosition) {
       var keyframe = sourceFrame.copy();
       keyframe.start = start;
       keyframe.end = end;
 
-      // The copied frames must not retain live tween anchors.
+      // The copy owns independent copies of every child, so dropping its
+      // tween children does not affect the source frame or other frames.
       keyframe.removeAllTweens();
-
-      // A label, scripts and sound should not run/play once per duplicate.
-      if (!preserveOriginalMetadata) {
-        keyframe.identifier = null;
-        keyframe.removeSound();
-        keyframe.getChildren('Script').slice().forEach(function (script) {
-          keyframe.removeChild(script);
-        });
-      }
-      preserveOriginalMetadata = false;
       var pose = sampleTween(relativePosition);
       if (pose) {
         keyframe.clips.forEach(function (clip) {
           clip.transformation = pose.transformation.copy();
         });
       }
+
+      // A label, sound, or script should not be duplicated onto every
+      // baked frame: keep them on the frame that still starts the span.
+      if (!isFirstFrame) {
+        keyframe.identifier = null;
+        keyframe.removeSound();
+        keyframe.scripts.slice().forEach(function (script) {
+          keyframe.removeScript(script.name);
+        });
+        keyframe.addScript('default', '');
+      }
+      isFirstFrame = false;
       createdFrames.push(keyframe);
       return keyframe;
     };
@@ -56725,8 +56792,14 @@ Wick.Frame = class extends Wick.Tickable {
       createBakedFrame(tweenEnd + 1, originalEnd, lastTween.playheadPosition);
     }
 
-    // All generated ranges exactly cover the old frame; avoid addFrame(),
-    // overlap resolution, and gap filling because they can modify that span.
+    // The tween has been baked into the copies, so the original frame no
+    // longer needs it. Remove the tween before detaching the source frame,
+    // since Tween.remove() relies on its parent frame.
+    sourceFrame.removeAllTweens();
+
+    // The generated ranges exactly cover the old frame. Avoid addFrame(),
+    // overlap resolution, and gap filling because they could modify frames
+    // outside the converted span.
     layer.removeChild(sourceFrame);
     createdFrames.forEach(function (frame) {
       layer.addChild(frame);
@@ -56736,6 +56809,7 @@ Wick.Frame = class extends Wick.Tickable {
     });
     return createdFrames;
   }
+
   /**
    * Remove a tween from the frame.
    * @param {Wick.Tween} tween - the tween to remove.
@@ -66014,39 +66088,8 @@ Wick.GUIElement.ActionButtonsContainer = class extends Wick.GUIElement {
       tooltip: 'Convert to Keyframes',
       icon: 'copy_frame_forward',
       clickFn: () => {
-        var project = this.model.project;
-        var selectedObjects = project.selection.getSelectedObjects('Timeline');
-        var framesToConvert = [];
-        selectedObjects.forEach(function (object) {
-          if (object instanceof Wick.Frame) {
-            framesToConvert.push(object);
-          } else if (object instanceof Wick.Tween && object.parentFrame) {
-            framesToConvert.push(object.parentFrame);
-          }
-        });
-
-        // A frame and one of its tween diamonds may both be selected.
-        framesToConvert = framesToConvert.filter(function (frame, index, allFrames) {
-          return frame && frame.parentLayer && frame.tweens.length > 0 && allFrames.indexOf(frame) === index;
-        });
-        if (framesToConvert.length === 0) return;
-        var convertedFrames = [];
-        framesToConvert.forEach(function (frame) {
-          convertedFrames = convertedFrames.concat(frame.convertTweenToKeyframes());
-        });
-        if (convertedFrames.length === 0) return;
-        project.selection.clear();
-        var activeTimeline = project.activeTimeline;
-        var activeLayer = project.activeLayer;
-        var playhead = activeTimeline ? activeTimeline.playheadPosition : -1;
-        var selectedKeyframe = convertedFrames.find(function (frame) {
-          return activeTimeline && frame.parentLayer === activeLayer && frame.inPosition(playhead);
-        }) || convertedFrames[0];
-        if (selectedKeyframe && selectedKeyframe.parentLayer) {
-          selectedKeyframe.parentLayer.activate();
-          project.selection.select(selectedKeyframe);
-        }
-        this.projectWasModified();
+        var convertedFrames = this.model.project.convertSelectedFramesToKeyframes();
+        if (convertedFrames.length > 0) this.projectWasModified();
       }
     });
     this.addTweenButton = new Wick.GUIElement.ActionButton(this.model, {
@@ -66124,12 +66167,7 @@ Wick.GUIElement.ActionButtonsContainer = class extends Wick.GUIElement {
     }
     var tweenButtonIsActive = this.model.project.canCreateTween;
     var deleteButtonIsActive = this.model.project.selection.getSelectedObjects('Timeline').length > 0;
-    var selectedTimelineObjects = this.model.project.selection.getSelectedObjects('Timeline');
-    var convertTweenButtonIsActive = selectedTimelineObjects.some(function (object) {
-      if (object instanceof Wick.Frame) return object.tweens.length > 0;
-      if (object instanceof Wick.Tween) return !!(object.parentFrame && object.parentFrame.tweens.length > 0);
-      return false;
-    });
+    var convertTweenButtonIsActive = this.model.project.canConvertSelectedFramesToKeyframes;
     ctx.save();
     ctx.save();
     var widthOfActionButtonContainer = Wick.GUIElement.IS_MOBILE ? 105 : 120;
@@ -68087,6 +68125,50 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
   }
 
   /**
+   * Select the frame or tween under a screen position.
+   * Used by the timeline context menu so a right-click acts on the item
+   * beneath the pointer without starting a drag gesture.
+   * @param {number} clientX - mouse x in window coordinates.
+   * @param {number} clientY - mouse y in window coordinates.
+   * @param {boolean} additive - keep the current selection.
+   * @returns {boolean} True if a frame or tween was selected.
+   */
+  selectTimelineTargetAtPosition(clientX, clientY, additive) {
+    this._onMouseMove({
+      clientX: clientX,
+      clientY: clientY,
+      buttons: 0
+    });
+    var target = this._getTopMouseTarget();
+    var model = target && target.model;
+    var isFrame = model instanceof Wick.Frame;
+    var isTween = model instanceof Wick.Tween;
+    if (!isFrame && !isTween || !model.parentLayer) {
+      return false;
+    }
+    if (!model.isSelected) {
+      if (!additive) {
+        this.model.selection.clear();
+      }
+      this.model.selection.select(model);
+    }
+    model.parentLayer.activate();
+
+    // Match the playhead placement of a normal click on the target.
+    if (isFrame) {
+      var localX = target.localMouse ? target.localMouse.x : 0;
+      var clickedPosition = model.start + Math.floor(localX / this.gridCellWidth);
+      this.model.activeTimeline.playheadPosition = Math.max(model.start, Math.min(model.end, clickedPosition));
+    } else {
+      this.model.activeTimeline.playheadPosition = model.parentFrame.start + model.playheadPosition - 1;
+    }
+
+    // This also redraws the canvas stage after the playhead moves.
+    this.projectWasModified();
+    return true;
+  }
+
+  /**
    * Auto scrolls the timeline if the playhead is considered off-screen.
    * This is built specifically for moving the playead with hotkeys.
    */
@@ -68156,6 +68238,18 @@ Wick.GUIElement.Project = class extends Wick.GUIElement {
     this.draw();
   }
   _timeline_onMouseDown(e) {
+    // Right-click opens the editor's timeline context menu. Update the
+    // hover target so the menu can act on what is under the pointer, but
+    // do not start a selection or drag gesture from this button.
+    if (e.button === 2) {
+      this.closePopupMenu();
+      this._onMouseMove({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        buttons: 0
+      });
+      return;
+    }
     this._playheadScrubbing = false;
     this.closePopupMenu();
     this.canvasClicked = true;
