@@ -1,11 +1,11 @@
 {
   "files": {
-    "main.css": "/test/static/css/main.3d9c3fc1.css",
-    "main.js": "/test/static/js/main.c783f514.js",
+    "main.css": "/test/static/css/main.5d8d772a.css",
+    "main.js": "/test/static/js/main.7663cd51.js",
     "static/media/cool_field3.png": "/test/static/media/cool_field3.17c4c0b571370d83875d.png",
+    "static/media/PartimateLogo.png": "/test/static/media/PartimateLogo.b57ba1747e12cdd4eee6.png",
     "static/media/search.svg": "/test/static/media/search.af8adee9f9abdfdb6633e4aff792f58d.svg",
     "static/media/layersDropdown.png": "/test/static/media/layersDropdown.2e1ace034119a56320ac.png",
-    "static/media/CSFlashy.png": "/test/static/media/CSFlashy.dfcd49481353c6ecc091.png",
     "static/media/alignX.png": "/test/static/media/alignX.c4a0b399d93245ad0ffe.png",
     "static/media/alignRight.png": "/test/static/media/alignRight.4f69477e3ec19391ccc9.png",
     "static/media/alignLeft.png": "/test/static/media/alignLeft.e97f5de1c44db4a0a128.png",
@@ -13,7 +13,6 @@
     "static/media/alignY.png": "/test/static/media/alignY.f510e8f134a9e4eefbfd.png",
     "static/media/alignTop.png": "/test/static/media/alignTop.ca7f2ed65cd280fd7d2b.png",
     "static/media/frameSizeMenu.png": "/test/static/media/frameSizeMenu.bcc31d9094cde5c0cb86.png",
-    "index.html": "/test/index.html",
     "static/media/gapFillBlankFrames.png": "/test/static/media/gapFillBlankFrames.2fd0ed02c5c4a96324de.png",
     "static/media/layerTween.png": "/test/static/media/layerTween.9db29809c8e11b4add2d.png",
     "static/media/alignBottom.png": "/test/static/media/alignBottom.e07a7e620097276c5565.png",
@@ -75,6 +74,7 @@
     "static/media/path.svg": "/test/static/media/path.e05ecb82c5d93d515e357e5a2137ebfc.svg",
     "static/media/delete.svg": "/test/static/media/delete.c96ef6debe11553d53d323b6591818d9.svg",
     "static/media/framelength.svg": "/test/static/media/framelength.8245250acd453603fe80efeac38efff6.svg",
+    "index.html": "/test/index.html",
     "static/media/github-logo-white.svg": "/test/static/media/github-logo-white.73cce2f3b3a7bb2a56c33aa244654a23.svg",
     "static/media/project.svg": "/test/static/media/project.d4b6cd9f7ff92df2943b5a33649406f6.svg",
     "static/media/zoomout.svg": "/test/static/media/zoomout.11bcf764970ae9bea1479e9072881fa5.svg",
@@ -180,7 +180,7 @@
     "static/media/empty_dropdown.svg": "/test/static/media/empty_dropdown.d22f2e7ff30a91d47ed5a4bb0b7ffe2b.svg"
   },
   "entrypoints": [
-    "static/css/main.3d9c3fc1.css",
-    "static/js/main.c783f514.js"
+    "static/css/main.5d8d772a.css",
+    "static/js/main.7663cd51.js"
   ]
 }
