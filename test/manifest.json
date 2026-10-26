@@ -1,15 +1,11 @@
 {
   "short_name": "Partimate",
-  "name": "Partimate - 2D Animation Editor",
+  "name": "Partimate 1.0 - 2D Animation Editor",
   "icons": [
-    {
-      "src": "favicon.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
+    { "src": "favicon.png", "sizes": "512x512", "type": "image/png" }
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#25151f",
-  "background_color": "#25151f"
+  "theme_color": "#D71920",
+  "background_color": "#25090B"
 }

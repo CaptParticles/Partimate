@@ -1,9 +1,9 @@
 {
   "files": {
-    "main.css": "./static/css/main.5d8d772a.css",
-    "main.js": "./static/js/main.e38aeeff.js",
+    "main.css": "./static/css/main.4660c5d3.css",
+    "main.js": "./static/js/main.084a257e.js",
+    "static/media/PartimateLogo.png": "./static/media/PartimateLogo.f1214ae0c42a2d84c760.png",
     "static/media/cool_field3.png": "./static/media/cool_field3.17c4c0b571370d83875d.png",
-    "static/media/PartimateLogo.png": "./static/media/PartimateLogo.b57ba1747e12cdd4eee6.png",
     "static/media/search.svg": "./static/media/search.af8adee9f9abdfdb6633e4aff792f58d.svg",
     "static/media/layersDropdown.png": "./static/media/layersDropdown.2e1ace034119a56320ac.png",
     "static/media/alignX.png": "./static/media/alignX.c4a0b399d93245ad0ffe.png",
@@ -180,7 +180,7 @@
     "static/media/empty_dropdown.svg": "./static/media/empty_dropdown.d22f2e7ff30a91d47ed5a4bb0b7ffe2b.svg"
   },
   "entrypoints": [
-    "static/css/main.5d8d772a.css",
-    "static/js/main.e38aeeff.js"
+    "static/css/main.4660c5d3.css",
+    "static/js/main.084a257e.js"
   ]
 }

@@ -7,9 +7,9 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: radial-gradient(circle at 50% 35%, #3b2231 0%, #25151f 58%, #171017 100%);
+  background: radial-gradient(circle at 50% 35%, #ff3b43 0%, #d71920 48%, #65090f 100%);
   color: #fff;
-  transition: opacity .35s ease;
+  transition: opacity .5s ease;
 }
 .partimate-splash {
   display: flex;
@@ -19,14 +19,14 @@
   gap: 12px;
   padding: 24px;
   text-align: center;
-  animation: partimate-float 1.8s ease-in-out infinite alternate;
+  animation: partimate-float .8s ease-in-out infinite alternate;
 }
 .partimate-splash img {
   display: block;
   width: min(42vw, 190px);
   height: min(42vw, 190px);
   object-fit: contain;
-  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .25));
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .28));
 }
 .partimate-splash-title {
   color: #fff;
@@ -37,7 +37,7 @@
   line-height: 1.1;
 }
 .partimate-splash-subtitle {
-  color: #f4cbd8;
+  color: #ffe2e3;
   font-family: 'Nunito Sans', sans-serif;
   font-size: 14px;
   letter-spacing: .08em;
@@ -46,6 +46,8 @@
 #wait-overlay {
   font-family: 'Nunito Sans', sans-serif;
 }
+/* Hide the old support button on production's existing compiled interface too. */
+#support-us-button, .menu-bar-support-button { display: none !important; }
 @keyframes partimate-float {
   from { transform: translateY(3px); }
   to { transform: translateY(-7px); }
