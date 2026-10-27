@@ -1,6 +1,6 @@
 {
   "short_name": "Partimate",
-  "name": "Partimate 1.0 - 2D Animation Editor",
+  "name": "Partimate 1.0 - A Fork of Wick Editor",
   "icons": [
     { "src": "favicon.png", "sizes": "512x512", "type": "image/png" }
   ],
