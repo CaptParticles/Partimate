@@ -108,6 +108,7 @@ Wick.Selection = class extends Wick.Base {
             "animationType",
             "singleFrameNumber",
             "isSynced",
+            "isGraphic",
         ];
     }
 
@@ -647,6 +648,25 @@ Wick.Selection = class extends Wick.Base {
 
         if (this.selectionType === "clip") {
             this.getSelectedObject().isSynced = syncBool;
+        }
+    }
+
+    /**
+     * Determines if a clip is a Graphic Symbol (its timeline is driven by the parent timeline).
+     */
+    get isGraphic () {
+        if (this.selectionType === "clip") {
+            return this.getSelectedObject().isGraphic;
+        } else {
+            return false;
+        }
+    }
+
+    set isGraphic (graphicBool) {
+        if (typeof graphicBool !== "boolean") return;
+
+        if (this.selectionType === "clip") {
+            this.getSelectedObject().isGraphic = graphicBool;
         }
     }
 

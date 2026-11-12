@@ -675,7 +675,11 @@ class Inspector extends Component {
             val={this.getSelectionAttribute('singleFrameNumber')}
             onChange={(val) => this.setSelectionAttribute('singleFrameNumber', val)} />
           }
-        {this.getSelectionAttribute('animationType') !== "single" &&
+        <InspectorCheckbox
+          tooltip="Graphic"
+          checked={this.getSelectionAttribute('isGraphic')}
+          onChange={(val) => this.setSelectionAttribute('isGraphic', !this.getSelectionAttribute('isGraphic'))}/>
+        {this.getSelectionAttribute('animationType') !== "single" && !this.getSelectionAttribute('isGraphic') &&
         <InspectorCheckbox
           tooltip="Synced" 
           checked={this.getSelectionAttribute('isSynced')}

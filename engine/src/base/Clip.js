@@ -51,6 +51,7 @@ Wick.Clip = class extends Wick.Tickable {
         this._singleFrameNumber = 1; // Default to 1, this value is only used if the animation type is single
         this._playedOnce = false;
         this._isSynced = false;
+        this._isGraphic = false; // Graphic symbol mode: internal timeline is driven by the parent timeline (with subframe sampling).
 
         this._transformation = args.transformation || new Wick.Transformation();
 
@@ -79,6 +80,7 @@ Wick.Clip = class extends Wick.Tickable {
         data.singleFrameNumber = this._singleFrameNumber;
         data.assetSourceUUID = this._assetSourceUUID;
         data.isSynced = this._isSynced;
+        data.isGraphic = this._isGraphic;
 
         return data;
     }
@@ -92,6 +94,7 @@ Wick.Clip = class extends Wick.Tickable {
         this._singleFrameNumber = data.singleFrameNumber || 1;
         this._assetSourceUUID = data.assetSourceUUID;
         this._isSynced = data.isSynced;
+        this._isGraphic = data.isGraphic === true; // Old projects have no isGraphic: default to off.
 
         this._playedOnce = false;
 
@@ -120,6 +123,88 @@ Wick.Clip = class extends Wick.Tickable {
      */
     get isRoot() {
         return this.project && this === this.project.root;
+    }
+
+    /**
+     * True if the clip is a Graphic Symbol: its internal timeline is driven by the position
+     * (and fractional time) of the parent timeline instead of playing on its own.
+     * The animationType decides how it plays: 'loop', 'playOnce', or 'single' (shows singleFrameNumber only).
+     * @type {boolean}
+     */
+    get isGraphic () {
+        return this._isGraphic && (!this.isRoot);
+    }
+
+    set isGraphic (bool) {
+        if (!(typeof bool === 'boolean')) {
+            return;
+        }
+        this._isGraphic = bool;
+
+        if (this.animationType === 'single') {
+            this.applySingleFramePosition();
+        } else if (bool) {
+            this.applySyncPosition();
+        } else {
+            this.timeline.playheadPosition = 1;
+        }
+    }
+
+    /**
+     * True if the clip's playhead is driven by the parent timeline (either legacy "Synced" or Graphic).
+     * Single frame clips never follow the parent.
+     * @type {boolean}
+     */
+    get followsParentTimeline () {
+        return this.isSynced || (this.isGraphic && this.animationType !== 'single');
+    }
+
+    /**
+     * Computes which internal frame a Graphic Symbol shows for a given (possibly fractional) parent time.
+     *
+     * Parent time is 1-based and fractional: 3.5 is halfway through parent frame 3.
+     * Let L be the number of parent frames the clip is exposed for, and N the number of internal frames.
+     * The internal timeline runs at max(1, N / L) internal frames per parent frame, so:
+     *  - if the exposure is shorter than the internal timeline (L < N), the whole internal timeline is
+     *    spread evenly across the exposure and every internal frame becomes visible, and
+     *  - otherwise it plays at normal speed (one internal frame per parent frame).
+     * 'loop' wraps around at the end, 'playOnce' holds the last frame.
+     *
+     * @param {number} parentTime - Fractional playhead position of the parent timeline.
+     * @returns {object} {frame: integer internal frame (1-based), subframe: fraction 0..1 into that frame}
+     */
+    getGraphicPosition (parentTime) {
+        let length = this.timeline.length;
+        let parentFrame = this.parentFrame;
+        if (!parentFrame || length < 1) {
+            return {frame: 1, subframe: 0};
+        }
+
+        let exposure = Math.max(1, parentFrame.length);
+        let speed = Math.max(1, length / exposure);
+        let elapsed = Math.max(0, parentTime - parentFrame.start);
+        let internal = elapsed * speed;
+        const EPSILON = 1e-9;
+
+        if (this.animationType === 'playOnce' && internal + EPSILON >= length) {
+            return {frame: length, subframe: 0};
+        }
+
+        let looped = ((internal % length) + length) % length;
+        let frame = Math.min(length, Math.floor(looped + EPSILON) + 1);
+        let subframe = Math.min(1, Math.max(0, looped - (frame - 1)));
+        if (subframe < EPSILON) subframe = 0;
+        return {frame: frame, subframe: subframe};
+    }
+
+    /**
+     * The internal frame a Graphic Symbol shows at the parent timeline's current (whole) frame.
+     * @type {number}
+     */
+    get graphicFrame () {
+        if (!this.parentClip || !this.parentClip.timeline) return 1;
+        let parentTime = this.parentClip.timeline.playheadPosition;
+        return this.getGraphicPosition(parentTime).frame;
     }
 
     /**
@@ -355,10 +440,49 @@ Wick.Clip = class extends Wick.Tickable {
     }
 
     /**
+     * Visual-only subframe sampling. Positions the timelines of every Graphic Symbol below this clip
+     * for a fractional parent time, WITHOUT ticking (no scripts, sounds, or events are triggered).
+     * Every timeline touched is recorded in `saved` so the caller can restore the real state afterwards.
+     * Expects this.timeline._subframe to already be set.
+     * @param {object[]} saved - Receives {timeline, playhead, subframe, graphic} records.
+     */
+    _sampleGraphicSubframes (saved) {
+        let timeline = this.timeline;
+        let parentTime = timeline.fractionalPlayheadPosition;
+        let parentSubframe = timeline.subframe;
+
+        timeline.activeFrames.forEach(frame => {
+            frame.clips.forEach(child => {
+                let childTimeline = child.timeline;
+                let isGraphic = child.isGraphic && child.animationType !== 'single';
+                saved.push({
+                    timeline: childTimeline,
+                    playhead: childTimeline._playheadPosition,
+                    subframe: childTimeline._subframe,
+                    graphic: isGraphic,
+                });
+
+                if (isGraphic) {
+                    let position = child.getGraphicPosition(parentTime);
+                    childTimeline._playheadPosition = position.frame;
+                    childTimeline._subframe = position.subframe;
+                    childTimeline.activeFrames.forEach(f => f.applyTweenTransforms());
+                } else {
+                    childTimeline._subframe = child.animationType === 'single' ? 0 : parentSubframe;
+                }
+
+                child._sampleGraphicSubframes(saved);
+            });
+        });
+    }
+
+    /**
      * Updates the clip's playhead position if the Clip is in sync mode
      */
     applySyncPosition () {
-        if (this.isSynced) {
+        if (this.isGraphic && this.animationType !== 'single') {
+            this.timeline.playheadPosition = this.graphicFrame;
+        } else if (this.isSynced) {
             this.timeline.playheadPosition = this.syncFrame;
         }
     }
@@ -371,7 +495,7 @@ Wick.Clip = class extends Wick.Tickable {
             this.applySingleFramePosition();
         } 
         
-        if (this.isSynced) {
+        if (this.followsParentTimeline) {
             this.applySyncPosition();
         }
     }
@@ -1642,8 +1766,8 @@ let avgIntersection = {
             }
         } 
         
-        if (this.isSynced && !this.isFocus) {
-            this.timeline.playheadPosition = this.syncFrame;
+        if (this.followsParentTimeline && !this.isFocus) {
+            this.applySyncPosition();
         }
 
         this._tickChildren();

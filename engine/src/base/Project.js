@@ -71,6 +71,9 @@ Wick.Project = class extends Wick.Base {
         this._currentKey = null;
 
         this._tickIntervalID = null;
+        this._subframeFrameID = null;
+        this._lastTickTime = 0;
+        this._lastSubframeSignature = null;
 
         this._hideCursor = false;
         this._muted = false;
@@ -1576,6 +1579,8 @@ orderDynamicFrames() {
 
         this.selection.clear();
 
+        this._startSubframeLoop();
+
         // Start tick loop
         this._tickIntervalID = setInterval(() => {
             args.onBeforeTick();
@@ -1589,6 +1594,10 @@ orderDynamicFrames() {
             this.view.paper.view.update();
             // console.timeEnd('update');
 
+            // A logical tick just finished: restart the subframe clock.
+            this._lastTickTime = this._now();
+            this._lastSubframeSignature = this._graphicSignature(0);
+
             if(error) {
                 this.stop();
                 return;
@@ -1598,6 +1607,111 @@ orderDynamicFrames() {
             args.onAfterTick();
             // console.timeEnd('afterTick');
         }, 1000 / this.framerate);
+    }
+
+    _now () {
+        return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    }
+
+    /**
+     * Samples every Graphic Symbol at the given fraction (0 to <1) of the current focus frame, then calls
+     * `fn(saved)`, then restores the real playhead positions. Nothing is ticked: scripts, sounds and
+     * other frame-based events only ever run in tick(), once per real frame.
+     * @param {number} subframe - Fraction of the current parent frame that has elapsed.
+     * @param {function} fn - Called while the sampled positions are applied.
+     * @returns {object[]} The sampled graphic timeline records.
+     */
+    _withGraphicSubframe (subframe, fn) {
+        let focusTimeline = this.focus.timeline;
+        let saved = [{
+            timeline: focusTimeline,
+            playhead: focusTimeline._playheadPosition,
+            subframe: focusTimeline._subframe,
+            graphic: false,
+        }];
+
+        focusTimeline._subframe = subframe;
+        this.focus._sampleGraphicSubframes(saved);
+
+        let graphics = saved.filter(entry => entry.graphic);
+        try {
+            if (fn) fn(graphics);
+        } finally {
+            for (let i = saved.length - 1; i >= 0; i--) {
+                let entry = saved[i];
+                let moved = entry.timeline._playheadPosition !== entry.playhead;
+                entry.timeline._playheadPosition = entry.playhead;
+                entry.timeline._subframe = entry.subframe;
+                if (moved) {
+                    entry.timeline.activeFrames.forEach(frame => frame.applyTweenTransforms());
+                }
+            }
+        }
+        return graphics;
+    }
+
+    /**
+     * A string describing which internal frames all Graphic Symbols show at a given subframe.
+     * Used to skip redundant renders when nothing visible would change.
+     * @param {number} subframe
+     * @returns {string} Empty string if there are no Graphic Symbols on screen.
+     */
+    _graphicSignature (subframe) {
+        let signature = '';
+        this._withGraphicSubframe(subframe, graphics => {
+            signature = graphics.map(entry => entry.timeline.uuid + ':' + entry.timeline._playheadPosition).join('|');
+        });
+        return signature;
+    }
+
+    /**
+     * Renders the project with all Graphic Symbols positioned for a fraction of the current frame.
+     * Purely visual: does not tick and does not move any playhead permanently.
+     * @param {number} subframe - Fraction (0 to <1) of the current frame that has elapsed.
+     * @param {boolean} force - Render even if the visible graphic frames did not change.
+     * @returns {boolean} True if something was rendered.
+     */
+    renderSubframe (subframe, force) {
+        subframe = Math.min(0.999999, Math.max(0, subframe));
+        let rendered = false;
+        this._withGraphicSubframe(subframe, graphics => {
+            if (graphics.length === 0) return;
+            let signature = graphics.map(entry => entry.timeline.uuid + ':' + entry.timeline._playheadPosition).join('|');
+            if (!force && signature === this._lastSubframeSignature) return;
+            this._lastSubframeSignature = signature;
+            this.view.render();
+            this.view.paper.view.update();
+            rendered = true;
+        });
+        return rendered;
+    }
+
+    _startSubframeLoop () {
+        this._stopSubframeLoop();
+        if (typeof requestAnimationFrame !== 'function') return;
+
+        this._lastTickTime = this._now();
+        this._lastSubframeSignature = null;
+
+        // Between logical ticks, re-render on every display refresh using how far we are into the current
+        // frame. This only draws: the parent timeline still advances once per tick, at the project's framerate.
+        let loop = () => {
+            if (!this._playing) return;
+            let frameDuration = 1000 / this.framerate;
+            let subframe = (this._now() - this._lastTickTime) / frameDuration;
+            if (subframe > 0) {
+                this.renderSubframe(subframe);
+            }
+            this._subframeFrameID = requestAnimationFrame(loop);
+        };
+        this._subframeFrameID = requestAnimationFrame(loop);
+    }
+
+    _stopSubframeLoop () {
+        if (this._subframeFrameID && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(this._subframeFrameID);
+        }
+        this._subframeFrameID = null;
     }
 
     /**
@@ -1660,6 +1774,7 @@ orderDynamicFrames() {
 
         clearInterval(this._tickIntervalID);
         this._tickIntervalID = null;
+        this._stopSubframeLoop();
 
         // Loading the snapshot to restore project state also moves the playhead back to where it was originally.
         // We actually don't want this, preview play should actually move the playhead after it's stopped.

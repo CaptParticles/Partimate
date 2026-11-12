@@ -28,6 +28,7 @@ Wick.Timeline = class extends Wick.Base {
         super(args);
 
         this._playheadPosition = 1;
+        this._subframe = 0; // Transient fraction (0..1) of the current frame that has elapsed. Only used for visual subframe sampling; never serialized.
         this._activeLayerIndex = 0;
 
         this._playing = true;
@@ -72,6 +73,23 @@ Wick.Timeline = class extends Wick.Base {
      */
     get playheadPosition() {
         return this._playheadPosition;
+    }
+
+    /**
+     * The fraction (0 to <1) of the current frame that has elapsed. This is only non-zero while
+     * the project is sampling Graphic Symbols between ticks, and is never saved.
+     * @type {number}
+     */
+    get subframe() {
+        return this._subframe;
+    }
+
+    /**
+     * The playhead position including the fractional part, e.g. 3.5 is halfway through frame 3.
+     * @type {number}
+     */
+    get fractionalPlayheadPosition() {
+        return this._playheadPosition + this._subframe;
     }
 
     set playheadPosition(playheadPosition) {
