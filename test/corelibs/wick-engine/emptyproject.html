@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.11.12.18.48.9";
+var WICK_ENGINE_BUILD_VERSION = "2026.11.12.19.43.2";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -49933,6 +49933,11 @@ Wick.Project = class extends Wick.Base {
     this._keysLastDown = [];
     this._currentKey = null;
     this._tickIntervalID = null;
+
+    // Graphic symbol subframe playback state (see play()/subtickGraphics()).
+    this._graphicSubtickIntervalID = null;
+    this._frameStartTimestamp = null;
+    this._graphicClips = [];
     this._hideCursor = false;
     this._muted = false;
     this._publishedMode = false; // Review the publishedMode setter for rules.
@@ -51478,7 +51483,12 @@ Wick.Project = class extends Wick.Base {
     this.selection.clear();
 
     // Start tick loop
+    this._frameStartTimestamp = Date.now();
+    this._graphicSubtickIntervalID = setInterval(() => {
+      this.subtickGraphics();
+    }, 1000 / this.graphicSubtickFramerate);
     this._tickIntervalID = setInterval(() => {
+      this._frameStartTimestamp = Date.now();
       args.onBeforeTick();
       this.tools.interact.determineMouseTargets();
       // console.time('tick');
@@ -51538,11 +51548,78 @@ Wick.Project = class extends Wick.Base {
   }
 
   /**
+   * The subframe framerate used to update and render Graphic symbols while playing.
+   * Higher than the project framerate so a graphic's internal frames can appear
+   * within a single parent frame (time-splitting).
+   * @type {number}
+   */
+  get graphicSubtickFramerate() {
+    return Math.min(240, Math.max(60, this.framerate * 5));
+  }
+
+  /**
+   * Fraction (0..1) of the current parent-frame interval that has elapsed since the
+   * last playback tick. Returns 0 when the project is not playing.
+   * @type {number}
+   */
+  get frameProgress() {
+    if (!this._playing || !this._frameStartTimestamp) return 0;
+    var elapsed = Date.now() - this._frameStartTimestamp;
+    var duration = 1000 / this.framerate;
+    return Math.max(0, Math.min(0.999, elapsed / duration));
+  }
+
+  /**
+   * Registers a graphic symbol clip for subframe updates during playback.
+   * @param {Wick.Clip} clip
+   */
+  registerGraphicClip(clip) {
+    if (!this._graphicClips) {
+      this._graphicClips = [];
+    }
+    for (var i = 0; i < this._graphicClips.length; i++) {
+      if (this._graphicClips[i].uuid === clip.uuid) return;
+    }
+    this._graphicClips.push(clip);
+  }
+
+  /**
+   * Unregisters a graphic symbol clip (e.g. when it is removed from the project).
+   * @param {Wick.Clip} clip
+   */
+  unregisterGraphicClip(clip) {
+    if (!this._graphicClips) return;
+    this._graphicClips = this._graphicClips.filter(seek => seek.uuid !== clip.uuid);
+  }
+
+  /**
+   * High-frequency playback update for graphic symbols: recomputes each active
+   * graphic's internal position from the parent timeline's elapsed (fractional)
+   * time, then re-renders the canvas. Movie clips are not touched here.
+   */
+  subtickGraphics() {
+    if (!this._playing || !this._graphicClips || this._graphicClips.length === 0) return;
+
+    // Prune clips that were removed, became inactive, or left the screen.
+    this._graphicClips = this._graphicClips.filter(clip => {
+      return clip.parent && clip.project && clip.onScreen && !clip.isFocus;
+    });
+    if (this._graphicClips.length === 0) return;
+    this._graphicClips.forEach(clip => clip.updateGraphicPlayback());
+    this.view.render();
+    this.view.paper.view.update();
+  }
+
+  /**
    * Stop playing the project.
    */
   stop() {
     this._playing = false;
     this.view.paper.view.autoUpdate = true;
+    clearInterval(this._graphicSubtickIntervalID);
+    this._graphicSubtickIntervalID = null;
+    this._frameStartTimestamp = null;
+    this._graphicClips = [];
 
     // Run unload scripts on all objects
     this.getAllFrames().forEach(frame => {
@@ -57127,7 +57204,7 @@ Wick.Clip = class extends Wick.Tickable {
     this._playedOnce = false;
     this._isSynced = false;
     this._isGraphic = args.isGraphic === true;
-    this._lastGraphicSyncOffset = undefined; // runtime-only tracking of the parent playhead offset (not serialized)
+    this._lastGraphicElapsed = null; // runtime-only tracking of parent elapsed time (not serialized)
 
     this._transformation = args.transformation || new Wick.Transformation();
     this._pivot = args.pivot || [0, 0];
@@ -57224,7 +57301,7 @@ Wick.Clip = class extends Wick.Tickable {
   set isGraphic(bool) {
     if (typeof bool !== 'boolean') return;
     this._isGraphic = bool;
-    this._lastGraphicSyncOffset = undefined;
+    this._lastGraphicElapsed = null;
     this._playedOnce = false;
     if (bool) {
       this.applySyncPosition();
@@ -57306,6 +57383,10 @@ Wick.Clip = class extends Wick.Tickable {
     } else {
       this._animationType = animationType;
       this.resetTimelinePosition();
+    }
+    if (this._isGraphic) {
+      this._lastGraphicElapsed = null;
+      this.updateGraphicPlayback();
     }
   }
 
@@ -57435,66 +57516,85 @@ Wick.Clip = class extends Wick.Tickable {
   }
 
   /**
-   * Updates the clip's playhead position if the Clip is in sync mode
+   * Updates the clip's playhead position if the Clip is in sync mode.
+   * Graphic symbols use proportional time-splitting against the parent timeline.
    */
   applySyncPosition() {
+    if (this._isGraphic) {
+      this.updateGraphicPlayback();
+      return;
+    }
     if (this.isSynced) {
       this.timeline.playheadPosition = this.syncFrame;
     }
   }
 
   /**
-   * Updates the playhead of a Graphic symbol (isGraphic = true).
+   * Updates the playhead of a Graphic symbol (isGraphic = true) using parent-timeline
+   * time-splitting: the graphic's internal animation is distributed proportionally
+   * across the duration that the graphic instance occupies on the parent timeline.
    *
-   * The parent timeline is the master clock: whenever the parent's playhead offset
-   * changes (during playback or while scrubbing), the graphic snaps to the synced
-   * frame. If the parent is playing but its offset does not change between ticks
-   * (for example, a graphic with multiple internal frames inside a one-frame
-   * parent span), the graphic advances its own internal timeline according to its
-   * animation type so its complete animation can still play.
+   * For example, a 2-frame graphic inside a 1-frame parent exposure shows internal
+   * frame 1 for the first half of that parent frame's duration and internal frame 2
+   * for the second half. The parent timeline's frame count is never changed.
+   *
+   * The fractional (subframe) progress comes from the project's playback clock
+   * (Wick.Project.frameProgress), so during playback the canvas can display more
+   * internal frames per parent frame than the parent framerate alone would allow
+   * (updated by the project's graphic subtick loop).
    */
   updateGraphicPlayback() {
     if (this.animationType === 'single') {
       this.applySingleFramePosition();
-      this._lastGraphicSyncOffset = this._graphicSyncOffset();
       return;
     }
-    var offset = this._graphicSyncOffset();
-    if (offset === null) {
-      // No parent to sync against; behave like a normally-advancing timeline.
-      this._lastGraphicSyncOffset = null;
-      this.timeline.advance();
-      return;
-    }
-    var parentMoved = offset !== this._lastGraphicSyncOffset;
-    this._lastGraphicSyncOffset = offset;
-    if (parentMoved || !this.project || !this.project.playing) {
-      // Parent-driven synchronization (scrubbing and normal multi-frame playback).
-      this.timeline.playheadPosition = this.syncFrame;
-      return;
-    }
-
-    // The parent is playing but did not move this tick; keep the graphic animating
-    // on its internal clock, honoring the animation type.
-    if (this.animationType === 'loop') {
-      this.timeline.advance();
-    } else if (this.animationType === 'playOnce') {
-      if (this.timeline.playheadPosition >= this.timeline.length) {
-        this.playedOnce = true;
-      } else {
+    if (this.isRoot || !this.parentClip || !this.parentFrame) {
+      // Nothing to distribute against; fall back to normal advancement while playing.
+      if (this.project && this.project.playing) {
         this.timeline.advance();
       }
+      return;
     }
-  }
-
-  /**
-   * The parent timeline's playhead offset relative to the start of this clip's
-   * parent frame. Returns null when no sync position can be computed.
-   * @type {number|null}
-   */
-  _graphicSyncOffset() {
-    if (this.isRoot || !this.parentClip || !this.parentFrame) return null;
-    return this.parentClip.timeline.playheadPosition - this.parentFrame.start;
+    if (this.project && this.project.playing && this.project.registerGraphicClip) {
+      this.project.registerGraphicClip(this);
+    }
+    var start = this.parentFrame.start;
+    var end = this.parentFrame.end;
+    var span = Math.max(1, end - start + 1);
+    var len = Math.max(1, this.timeline.length);
+    var pos = this.parentClip.timeline.playheadPosition;
+    var frac = this.project && this.project.playing ? this.project.frameProgress || 0 : 0;
+    var elapsed = pos - start + frac;
+    var lastElapsed = this._lastGraphicElapsed;
+    var wrapped = typeof lastElapsed === 'number' && elapsed + 1e-6 < lastElapsed && this.project && this.project.playing;
+    var scrubbedBackwards = typeof lastElapsed === 'number' && elapsed + 1e-6 < lastElapsed && !(this.project && this.project.playing);
+    this._lastGraphicElapsed = elapsed;
+    if (this.animationType === 'playOnce') {
+      if (pos > end || elapsed >= span) {
+        // The parent playhead moved past this graphic's exposure: playback finished.
+        this.playedOnce = true;
+      } else if (wrapped) {
+        this.playedOnce = true;
+      } else if (scrubbedBackwards) {
+        this.playedOnce = false;
+      }
+    }
+    var position;
+    if (this.animationType === 'playOnce' && this.playedOnce) {
+      position = len;
+    } else {
+      var e = Math.max(0, elapsed);
+      if (this.animationType === 'playOnce') {
+        e = Math.min(e, span - 1e-6);
+      } else {
+        // Loop: wrap the exposure so the graphic cycles once per parent exposure.
+        e = (e % span + span) % span;
+      }
+      position = Math.min(len, Math.floor(e / span * len) + 1);
+    }
+    if (this.timeline.playheadPosition !== position) {
+      this.timeline.playheadPosition = position;
+    }
   }
 
   /**
