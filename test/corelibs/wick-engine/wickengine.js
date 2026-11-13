@@ -1,5 +1,5 @@
 /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.10.26.20.37.53";
+var WICK_ENGINE_BUILD_VERSION = "2026.11.12.18.48.9";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -52062,7 +52062,7 @@ Wick.Selection = class extends Wick.Base {
    * @type {string[]}
    */
   get allAttributeNames() {
-    return ["strokeWidth", "fillColor", "strokeColor", "name", "filename", "fontSize", "fontFamily", "fontWeight", "fontStyle", "src", "frameLength", "x", "y", "originX", "originY", "width", "height", "rotation", "opacity", "sound", "soundVolume", "soundStart", "identifier", "easingType", "fullRotations", "scaleX", "scaleY", "animationType", "singleFrameNumber", "isSynced"];
+    return ["strokeWidth", "fillColor", "strokeColor", "name", "filename", "fontSize", "fontFamily", "fontWeight", "fontStyle", "src", "frameLength", "x", "y", "originX", "originY", "width", "height", "rotation", "opacity", "sound", "soundVolume", "soundStart", "identifier", "easingType", "fullRotations", "scaleX", "scaleY", "animationType", "singleFrameNumber", "isSynced", "isGraphic"];
   }
 
   /**
@@ -52576,6 +52576,21 @@ Wick.Selection = class extends Wick.Base {
     if (!typeof syncBool === "boolean") return;
     if (this.selectionType === "clip") {
       this.getSelectedObject().isSynced = syncBool;
+    }
+  }
+  /**
+   * Graphic Symbol setting for a selected clip.
+   */
+  get isGraphic() {
+    if (this.selectionType === "clip") {
+      return this.getSelectedObject().isGraphic;
+    }
+    return false;
+  }
+  set isGraphic(graphicBool) {
+    if (typeof graphicBool !== "boolean") return;
+    if (this.selectionType === "clip") {
+      this.getSelectedObject().isGraphic = graphicBool;
     }
   }
 
@@ -57096,6 +57111,9 @@ Wick.Clip = class extends Wick.Tickable {
     this._singleFrameNumber = 1; // Default to 1, this value is only used if the animation type is single
     this._playedOnce = false;
     this._isSynced = false;
+    this._isGraphic = args.isGraphic === true;
+    this._lastGraphicSyncOffset = undefined; // runtime-only tracking of the parent playhead offset (not serialized)
+
     this._transformation = args.transformation || new Wick.Transformation();
     this._pivot = args.pivot || [0, 0];
     this.cursor = 'default';
@@ -57118,6 +57136,7 @@ Wick.Clip = class extends Wick.Tickable {
     data.singleFrameNumber = this._singleFrameNumber;
     data.assetSourceUUID = this._assetSourceUUID;
     data.isSynced = this._isSynced;
+    data.isGraphic = this._isGraphic;
     return data;
   }
   _deserialize(data) {
@@ -57129,6 +57148,7 @@ Wick.Clip = class extends Wick.Tickable {
     this._singleFrameNumber = data.singleFrameNumber || 1;
     this._assetSourceUUID = data.assetSourceUUID;
     this._isSynced = data.isSynced;
+    this._isGraphic = data.isGraphic === true;
     this._playedOnce = false;
     this._clones = [];
   }
@@ -57162,7 +57182,7 @@ Wick.Clip = class extends Wick.Tickable {
    */
   get isSynced() {
     let isSingle = this.animationType === 'single';
-    return this._isSynced && !isSingle && !this.isRoot;
+    return (this._isSynced || this._isGraphic) && !isSingle && !this.isRoot;
   }
   set isSynced(bool) {
     if (!(typeof bool === 'boolean')) {
@@ -57172,6 +57192,28 @@ Wick.Clip = class extends Wick.Tickable {
     if (bool) {
       this.applySyncPosition();
     } else {
+      this.timeline.playheadPosition = 1;
+    }
+  }
+
+  /**
+   * Graphic symbol setting for this clip. When true, the clip's internal timeline is
+   * driven by its parent timeline (Adobe Animate-style Graphic Symbol): scrubbing or
+   * playing the parent moves the graphic's displayed frame. The Animation dropdown
+   * continues to control Loop, Play Once, and Single Frame playback for graphics.
+   * @type {boolean}
+   */
+  get isGraphic() {
+    return this._isGraphic === true;
+  }
+  set isGraphic(bool) {
+    if (typeof bool !== 'boolean') return;
+    this._isGraphic = bool;
+    this._lastGraphicSyncOffset = undefined;
+    this._playedOnce = false;
+    if (bool) {
+      this.applySyncPosition();
+    } else if (!this._isSynced) {
       this.timeline.playheadPosition = 1;
     }
   }
@@ -57384,6 +57426,60 @@ Wick.Clip = class extends Wick.Tickable {
     if (this.isSynced) {
       this.timeline.playheadPosition = this.syncFrame;
     }
+  }
+
+  /**
+   * Updates the playhead of a Graphic symbol (isGraphic = true).
+   *
+   * The parent timeline is the master clock: whenever the parent's playhead offset
+   * changes (during playback or while scrubbing), the graphic snaps to the synced
+   * frame. If the parent is playing but its offset does not change between ticks
+   * (for example, a graphic with multiple internal frames inside a one-frame
+   * parent span), the graphic advances its own internal timeline according to its
+   * animation type so its complete animation can still play.
+   */
+  updateGraphicPlayback() {
+    if (this.animationType === 'single') {
+      this.applySingleFramePosition();
+      this._lastGraphicSyncOffset = this._graphicSyncOffset();
+      return;
+    }
+    var offset = this._graphicSyncOffset();
+    if (offset === null) {
+      // No parent to sync against; behave like a normally-advancing timeline.
+      this._lastGraphicSyncOffset = null;
+      this.timeline.advance();
+      return;
+    }
+    var parentMoved = offset !== this._lastGraphicSyncOffset;
+    this._lastGraphicSyncOffset = offset;
+    if (parentMoved || !this.project || !this.project.playing) {
+      // Parent-driven synchronization (scrubbing and normal multi-frame playback).
+      this.timeline.playheadPosition = this.syncFrame;
+      return;
+    }
+
+    // The parent is playing but did not move this tick; keep the graphic animating
+    // on its internal clock, honoring the animation type.
+    if (this.animationType === 'loop') {
+      this.timeline.advance();
+    } else if (this.animationType === 'playOnce') {
+      if (this.timeline.playheadPosition >= this.timeline.length) {
+        this.playedOnce = true;
+      } else {
+        this.timeline.advance();
+      }
+    }
+  }
+
+  /**
+   * The parent timeline's playhead offset relative to the start of this clip's
+   * parent frame. Returns null when no sync position can be computed.
+   * @type {number|null}
+   */
+  _graphicSyncOffset() {
+    if (this.isRoot || !this.parentClip || !this.parentFrame) return null;
+    return this.parentClip.timeline.playheadPosition - this.parentFrame.start;
   }
 
   /**
@@ -58561,21 +58657,25 @@ Wick.Clip = class extends Wick.Tickable {
   }
   _onActive() {
     super._onActive();
-    if (this.isFocus || this.animationType === 'loop') {
-      this.timeline.advance();
-    } else if (this.animationType === 'single') {
-      this.timeline.playheadPosition = this.singleFrameNumber;
-    } else if (this.animationType === 'playOnce') {
-      if (!this.playedOnce) {
-        if (this.timeline.playheadPosition === this.timeline.length) {
-          this.playedOnce = true;
-        } else {
-          this.timeline.advance();
+    if (this.isGraphic && !this.isFocus) {
+      this.updateGraphicPlayback();
+    } else {
+      if (this.isFocus || this.animationType === 'loop') {
+        this.timeline.advance();
+      } else if (this.animationType === 'single') {
+        this.timeline.playheadPosition = this.singleFrameNumber;
+      } else if (this.animationType === 'playOnce') {
+        if (!this.playedOnce) {
+          if (this.timeline.playheadPosition === this.timeline.length) {
+            this.playedOnce = true;
+          } else {
+            this.timeline.advance();
+          }
         }
       }
-    }
-    if (this.isSynced && !this.isFocus) {
-      this.timeline.playheadPosition = this.syncFrame;
+      if (this.isSynced && !this.isFocus) {
+        this.timeline.playheadPosition = this.syncFrame;
+      }
     }
     this._tickChildren();
   }
