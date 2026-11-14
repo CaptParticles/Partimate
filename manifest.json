@@ -1,15 +1,11 @@
 {
-  "short_name": "Wick Editor",
-  "name": "Wick Editor",
+  "short_name": "Partimate",
+  "name": "Partimate 1.0 - A Fork of Wick Editor",
   "icons": [
-    {
-      "src": "favicon.png",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    }
+    { "src": "favicon.png", "sizes": "512x512", "type": "image/png" }
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#D71920",
+  "background_color": "#25090B"
 }
