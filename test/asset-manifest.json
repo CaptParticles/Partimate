@@ -1,7 +1,7 @@
 {
   "files": {
     "main.css": "/Partimate/test/static/css/main.4957b64c.css",
-    "main.js": "/Partimate/test/static/js/main.6fc36c62.js",
+    "main.js": "/Partimate/test/static/js/main.1646f08f.js",
     "static/media/PartimateLogo.png": "/Partimate/test/static/media/PartimateLogo.f1214ae0c42a2d84c760.png",
     "static/media/cool_field3.png": "/Partimate/test/static/media/cool_field3.17c4c0b571370d83875d.png",
     "static/media/search.svg": "/Partimate/test/static/media/search.af8adee9f9abdfdb6633e4aff792f58d.svg",
@@ -181,6 +181,6 @@
   },
   "entrypoints": [
     "static/css/main.4957b64c.css",
-    "static/js/main.6fc36c62.js"
+    "static/js/main.1646f08f.js"
   ]
 }

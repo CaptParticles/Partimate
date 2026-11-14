@@ -14,7 +14,7 @@
         <!-- The Wick Engine build is injected here during the engine build step (see gulpfile.js) -->
         <script>
             /*Wick Engine https://github.com/Wicklets/wick-engine*/
-var WICK_ENGINE_BUILD_VERSION = "2026.11.12.19.43.2";
+var WICK_ENGINE_BUILD_VERSION = "2026.11.13.18.0.27";
 /*!
  * Paper.js v0.12.4 - The Swiss Army Knife of Vector Graphics Scripting.
  * http://paperjs.org/
@@ -49936,8 +49936,12 @@ Wick.Project = class extends Wick.Base {
 
     // Graphic symbol subframe playback state (see play()/subtickGraphics()).
     this._graphicSubtickIntervalID = null;
+    this._graphicSubtickRAF = null;
+    this._graphicSubtickRate = null;
     this._frameStartTimestamp = null;
     this._graphicClips = [];
+    this._renderFrameProgress = null; // set while exporting an image sequence
+
     this._hideCursor = false;
     this._muted = false;
     this._publishedMode = false; // Review the publishedMode setter for rules.
@@ -50167,7 +50171,13 @@ Wick.Project = class extends Wick.Base {
     if (typeof framerate !== 'number') return;
     if (framerate < 1) framerate = 1;
     if (framerate > 9999) framerate = 9999;
+    var changed = this._framerate !== framerate;
     this._framerate = framerate;
+
+    // Keep the Graphic subframe cadence in step with the project framerate.
+    if (changed && this._playing && this.startGraphicSubframeLoop) {
+      this.startGraphicSubframeLoop();
+    }
   }
 
   /**
@@ -51484,9 +51494,7 @@ Wick.Project = class extends Wick.Base {
 
     // Start tick loop
     this._frameStartTimestamp = Date.now();
-    this._graphicSubtickIntervalID = setInterval(() => {
-      this.subtickGraphics();
-    }, 1000 / this.graphicSubtickFramerate);
+    this.startGraphicSubframeLoop();
     this._tickIntervalID = setInterval(() => {
       this._frameStartTimestamp = Date.now();
       args.onBeforeTick();
@@ -51550,11 +51558,33 @@ Wick.Project = class extends Wick.Base {
   /**
    * The subframe framerate used to update and render Graphic symbols while playing.
    * Higher than the project framerate so a graphic's internal frames can appear
-   * within a single parent frame (time-splitting).
+   * within a single parent frame (time-splitting). Scales with the densest graphic in
+   * the project so several internal frames per parent frame are not dropped.
    * @type {number}
    */
   get graphicSubtickFramerate() {
-    return Math.min(240, Math.max(60, this.framerate * 5));
+    var samples = 1;
+    if (this._graphicClips && this._graphicClips.length) {
+      this._graphicClips.forEach(clip => {
+        var frame = clip.parentFrame;
+        var span = frame ? Math.max(1, frame.end - frame.start + 1) : 1;
+        samples = Math.max(samples, Math.ceil(Math.max(1, clip.timeline.length) / span));
+      });
+    }
+    var factor = Math.max(5, samples * 2);
+    return Math.min(240, Math.max(60, this.framerate * factor));
+  }
+
+  /**
+   * Explicit subframe progress (0..1) used while rendering an export. When null, the
+   * live playback clock (frameProgress) is used instead.
+   * @type {number|null}
+   */
+  get renderFrameProgress() {
+    return typeof this._renderFrameProgress === 'number' ? this._renderFrameProgress : null;
+  }
+  set renderFrameProgress(progress) {
+    this._renderFrameProgress = typeof progress === 'number' ? progress : null;
   }
 
   /**
@@ -51563,10 +51593,98 @@ Wick.Project = class extends Wick.Base {
    * @type {number}
    */
   get frameProgress() {
+    if (typeof this._renderFrameProgress === 'number') return this._renderFrameProgress;
     if (!this._playing || !this._frameStartTimestamp) return 0;
     var elapsed = Date.now() - this._frameStartTimestamp;
     var duration = 1000 / this.framerate;
     return Math.max(0, Math.min(0.999, elapsed / duration));
+  }
+
+  /**
+   * Starts the high-frequency Graphic symbol update loop.
+   *
+   * A timer drives the loop so graphics keep advancing even in environments where
+   * requestAnimationFrame is throttled or stalled (hidden tabs, embedded webviews,
+   * automation browsers). When rAF is available it also triggers updates, keeping
+   * the paint aligned with the display refresh. subtickGraphics() only repaints when
+   * an internal frame actually changed, so the two triggers never double-render.
+   */
+  startGraphicSubframeLoop() {
+    this.stopGraphicSubframeLoop();
+
+    // Cache the rate actually used so registration of a denser graphic can restart
+    // the loop at the required cadence.
+    this._graphicSubtickRate = this.graphicSubtickFramerate;
+    this._graphicSubtickIntervalID = setInterval(() => {
+      this.subtickGraphics();
+    }, 1000 / this._graphicSubtickRate);
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      var step = () => {
+        if (!this._playing) {
+          this._graphicSubtickRAF = null;
+          return;
+        }
+        this.subtickGraphics();
+        this._graphicSubtickRAF = window.requestAnimationFrame(step);
+      };
+      this._graphicSubtickRAF = window.requestAnimationFrame(step);
+    }
+  }
+
+  /**
+   * Stops the Graphic symbol subframe update loop.
+   */
+  stopGraphicSubframeLoop() {
+    if (this._graphicSubtickRAF !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(this._graphicSubtickRAF);
+    }
+    this._graphicSubtickRAF = null;
+    if (this._graphicSubtickIntervalID !== null) {
+      clearInterval(this._graphicSubtickIntervalID);
+    }
+    this._graphicSubtickIntervalID = null;
+  }
+
+  /**
+   * Every graphic symbol clip that currently needs subframe updates.
+   * @returns {Wick.Clip[]}
+   */
+  getActiveGraphicClips() {
+    var clips = [];
+    this.getAllFrames().forEach(frame => {
+      frame.clips.forEach(clip => {
+        if (clip.isGraphic && clip.animationType !== 'single' && clip.onScreen) {
+          clips.push(clip);
+        }
+      });
+    });
+    return clips;
+  }
+
+  /**
+   * How many internal graphic states exist inside a single parent frame across the
+   * whole project. Used to sample exports densely enough that no internal graphic frame
+   * is silently discarded.
+   * @returns {number}
+   */
+  getGraphicSubframeSamples() {
+    var samples = 1;
+    this.getActiveGraphicClips().forEach(clip => {
+      var frame = clip.parentFrame;
+      var span = frame ? Math.max(1, frame.end - frame.start + 1) : 1;
+      var len = Math.max(1, clip.timeline.length);
+      samples = Math.max(samples, Math.ceil(len / span));
+    });
+    return Math.min(samples, 8);
+  }
+
+  /**
+   * Recomputes all active graphic symbols for a single rendered image (used by export).
+   * @param {number} progress - Subframe progress (0..1) within the current parent frame.
+   */
+  updateGraphicsForRender(progress) {
+    this._renderFrameProgress = progress;
+    this.getActiveGraphicClips().forEach(clip => clip.updateGraphicPlayback());
   }
 
   /**
@@ -51581,6 +51699,12 @@ Wick.Project = class extends Wick.Base {
       if (this._graphicClips[i].uuid === clip.uuid) return;
     }
     this._graphicClips.push(clip);
+
+    // A newly registered graphic may need a denser update cadence than the one the
+    // running loop was started with.
+    if (this._playing && this._graphicSubtickRate !== this.graphicSubtickFramerate) {
+      this.startGraphicSubframeLoop();
+    }
   }
 
   /**
@@ -51605,7 +51729,13 @@ Wick.Project = class extends Wick.Base {
       return clip.parent && clip.project && clip.onScreen && !clip.isFocus;
     });
     if (this._graphicClips.length === 0) return;
-    this._graphicClips.forEach(clip => clip.updateGraphicPlayback());
+
+    // Only repaint when at least one graphic actually changed its internal frame.
+    var changed = false;
+    this._graphicClips.forEach(clip => {
+      if (clip.updateGraphicPlayback()) changed = true;
+    });
+    if (!changed) return;
     this.view.render();
     this.view.paper.view.update();
   }
@@ -51618,6 +51748,7 @@ Wick.Project = class extends Wick.Base {
     this.view.paper.view.autoUpdate = true;
     clearInterval(this._graphicSubtickIntervalID);
     this._graphicSubtickIntervalID = null;
+    this.stopGraphicSubframeLoop();
     this._frameStartTimestamp = null;
     this._graphicClips = [];
 
@@ -51866,10 +51997,16 @@ Wick.Project = class extends Wick.Base {
     renderCopy.view.paper.view.autoUpdate = false;
     var frameImages = [];
     var numMaxFrameImages = renderCopy.focus.timeline.length;
+
+    // Graphic symbols can show several internal frames within a single parent frame.
+    // Capture that many rendered images per parent frame so export never drops them.
+    var subframeSamples = Math.max(1, Math.floor(args.subframeSamples || renderCopy.getGraphicSubframeSamples()));
+    var subframeIndex = 0;
     var restored = false;
     var restore = () => {
       if (restored) return;
       restored = true;
+      renderCopy._renderFrameProgress = null;
       renderCopy.view.paper.view.autoUpdate = true;
       this.view.canvasContainer = oldCanvasContainer;
       this.view.resize();
@@ -51883,11 +52020,12 @@ Wick.Project = class extends Wick.Base {
       args.onProgress(currentPos, numMaxFrameImages);
       if (currentPos >= numMaxFrameImages) {
         restore();
-        args.onFinish(frameImages);
+        args.onFinish(frameImages, subframeSamples);
       } else {
         var oldPlayhead = renderCopy.activeTimeline.playheadPosition;
         renderCopy.tick();
         renderCopy.activeTimeline.playheadPosition = oldPlayhead + 1;
+        subframeIndex = 0;
         renderFrame();
       }
     };
@@ -51896,6 +52034,20 @@ Wick.Project = class extends Wick.Base {
       if (args.onError) args.onError(error);else console.error(error);
     };
     var renderFrame = () => {
+      // Position graphic symbols at this subframe of the current parent frame.
+      if (subframeIndex > 0) {
+        renderCopy.updateGraphicsForRender(subframeIndex / subframeSamples);
+        renderCopy.view.render();
+        renderCopy.view.paper.view.update();
+      }
+      var nextImage = () => {
+        subframeIndex++;
+        if (subframeIndex < subframeSamples) {
+          renderFrame();
+        } else {
+          advance();
+        }
+      };
       // Streaming consumers finish processing this compressed frame before
       // the next canvas render. GIF/image callers keep the existing API.
       if (args.onFrame) {
@@ -51907,7 +52059,7 @@ Wick.Project = class extends Wick.Base {
               fail(new Error('Failed to capture video frame'));
               return;
             }
-            Promise.resolve().then(() => args.onFrame(blob)).then(advance).catch(fail);
+            Promise.resolve().then(() => args.onFrame(blob)).then(nextImage).catch(fail);
           }, args.imageType);
         } catch (error) {
           fail(error);
@@ -51917,7 +52069,7 @@ Wick.Project = class extends Wick.Base {
       var frameImage = new Image();
       frameImage.onload = () => {
         frameImages.push(frameImage);
-        advance();
+        nextImage();
       };
       renderCopy.view.render();
       renderCopy.view.paper.view.update();
@@ -57205,6 +57357,7 @@ Wick.Clip = class extends Wick.Tickable {
     this._isSynced = false;
     this._isGraphic = args.isGraphic === true;
     this._lastGraphicElapsed = null; // runtime-only tracking of parent elapsed time (not serialized)
+    this._lastGraphicParentPos = null; // runtime-only: last parent playhead this graphic synced to
 
     this._transformation = args.transformation || new Wick.Transformation();
     this._pivot = args.pivot || [0, 0];
@@ -57302,6 +57455,7 @@ Wick.Clip = class extends Wick.Tickable {
     if (typeof bool !== 'boolean') return;
     this._isGraphic = bool;
     this._lastGraphicElapsed = null;
+    this._lastGraphicParentPos = null;
     this._playedOnce = false;
     if (bool) {
       this.applySyncPosition();
@@ -57386,6 +57540,7 @@ Wick.Clip = class extends Wick.Tickable {
     }
     if (this._isGraphic) {
       this._lastGraphicElapsed = null;
+      this._lastGraphicParentPos = null;
       this.updateGraphicPlayback();
     }
   }
@@ -57546,14 +57701,15 @@ Wick.Clip = class extends Wick.Tickable {
   updateGraphicPlayback() {
     if (this.animationType === 'single') {
       this.applySingleFramePosition();
-      return;
+      return false;
     }
     if (this.isRoot || !this.parentClip || !this.parentFrame) {
       // Nothing to distribute against; fall back to normal advancement while playing.
       if (this.project && this.project.playing) {
         this.timeline.advance();
+        return true;
       }
-      return;
+      return false;
     }
     if (this.project && this.project.playing && this.project.registerGraphicClip) {
       this.project.registerGraphicClip(this);
@@ -57563,7 +57719,24 @@ Wick.Clip = class extends Wick.Tickable {
     var span = Math.max(1, end - start + 1);
     var len = Math.max(1, this.timeline.length);
     var pos = this.parentClip.timeline.playheadPosition;
-    var frac = this.project && this.project.playing ? this.project.frameProgress || 0 : 0;
+
+    // Did the parent timeline move to a different frame since the last update?
+    // (When it did, the graphic must reposition immediately; when it did not, we are
+    // inside one parent exposure and must not skip internal frames.)
+    var parentPosChanged = pos !== this._lastGraphicParentPos;
+    this._lastGraphicParentPos = pos;
+
+    // Fractional time source. Export overrides this so a rendered image sequence can
+    // sample several internal graphic frames per parent frame. Otherwise it comes from
+    // the live playback clock (project elapsed time within the current parent frame).
+    var frac = 0;
+    if (this.project) {
+      if (typeof this.project.renderFrameProgress === 'number') {
+        frac = this.project.renderFrameProgress;
+      } else if (this.project.playing) {
+        frac = this.project.frameProgress || 0;
+      }
+    }
     var elapsed = pos - start + frac;
     var lastElapsed = this._lastGraphicElapsed;
     var wrapped = typeof lastElapsed === 'number' && elapsed + 1e-6 < lastElapsed && this.project && this.project.playing;
@@ -57592,9 +57765,20 @@ Wick.Clip = class extends Wick.Tickable {
       }
       position = Math.min(len, Math.floor(e / span * len) + 1);
     }
+
+    // Never skip an internal frame inside a single parent exposure. When rendering is
+    // slower than the internal frame rate (or several internal frames share one parent
+    // frame), paint at most one new internal frame per update so every pose is visible.
+    var playing = !!(this.project && this.project.playing);
+    var current = this.timeline.playheadPosition;
+    if (playing && !parentPosChanged && this.animationType !== 'playOnce' && position > current + 1) {
+      position = current + 1;
+    }
     if (this.timeline.playheadPosition !== position) {
       this.timeline.playheadPosition = position;
+      return true;
     }
+    return false;
   }
 
   /**
